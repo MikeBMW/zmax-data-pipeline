@@ -22,11 +22,10 @@ else
     echo "  🔴 转发器 :8769  无响应"
 fi
 
-# 3. Orin 连接
-ORIN=$(curl -s --max-time 3 http://127.0.0.1:8769/ 2>/dev/null)
-ORIN_OK=$(echo "$ORIN" | grep -o '"online":true')
-if [ -n "$ORIN_OK" ]; then
-    echo "  🟢 Orin 连接  健康"
+# 3. Orin 连接（直接检查服务器是否可达，不依赖文件时间戳）
+ORIN_CHECK=$(curl -s --max-time 3 http://192.168.23.10:8765/record/status 2>/dev/null)
+if echo "$ORIN_CHECK" | grep -q "recording"; then
+    echo "  🟢 Orin 连接  在线"
 else
     echo "  🔴 Orin 连接  离线"
 fi
