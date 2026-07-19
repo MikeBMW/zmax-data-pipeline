@@ -1,0 +1,18 @@
+{
+  "project": "Z-MAX Data Pipeline",
+  "version": "v2.3-auto-0719",
+  "date": "2026-07-19",
+  "maintainer": "小芳 (Hermes)",
+  "status": "running",
+  "components": {
+    "orin_gateway": {"port": 8765, "status": "online"},
+    "mac_daemon": {"port": 8766, "status": "running", "pid": 52953},
+    "mac_forwarder": {"port": 8769, "status": "running"},
+    "heartbeat_4090": {"url": "datadrive.world", "status": "ok"}
+  },
+  "cycle": {
+    "duration_s": 30,
+    "auto_upload": true,
+    "last_run": null
+  }
+}
