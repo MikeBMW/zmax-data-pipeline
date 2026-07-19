@@ -1,79 +1,98 @@
 # Z-MAX 数据管线 · zmax-data-pipeline
 
-> 小芳维护 · v2.3-auto-0719
+> 小芳维护 · pipe 工程  
+> 版本: `v2.4.1` · 2026-07-19
 
 ## 架构
 
 ```
-Orin (192.168.23.10:8765)  ─HTTP─→  MAC  ─HTTP─→  4090 (datadrive.world)
-  POST /record/start              自动采集循环          POST /api/comfy/upload
-  GET  /record/status             每 5 分钟            数据落盘 → 训练触发
-  GET  /record/download           心跳每 5 秒
+Orin (192.168.23.66:8765)          MAC (192.168.23.1)              4090 (datadrive.world)
+┌────────────────────┐            ┌──────────────────┐            ┌────────────────────┐
+│ FastAPI 网关       │            │ 转发器            │            │ ComfyUI 后端        │
+│ POST /record/start │ ←──HTTP── │ mac_forwarder.sh  │ ──HTTP──→ │ POST /api/comfy/    │
+│ GET /record/status │ 检测新包   │ 每5秒轮询Orin     │  上传      │ upload              │
+│ GET /record/latest │            │ SCP下载→POST上传  │            │ 数据落盘→触发训练    │
+│ GET /record/download│           │ 上传后删除Orin包  │            │                     │
+│ GET /health        │            │                    │            │                     │
+└────────────────────┘            └──────────────────┘            └────────────────────┘
+         ↑                                ↑
+  orin_collect.sh                     mac_heartbeat.py
+  5秒循环录制→压缩tar.gz              每5秒上报Orin状态
+  缓冲最多10个包                       recording/false
 ```
 
-## 启动采集守护
+## 部署指令（Mac 终端执行）
+
+### 一键部署 Orin 全套
 
 ```bash
-# 1. 进主工程
-cd /Users/mikeni/lerobot-smolvla-lew
-
-# 2. 切到 main 分支
-git checkout main
-git pull origin main
-
-# 3. 运行自动采集（后台常驻）
-python3 tools/zmax_auto_collector.py &
-
-# 或前台运行:
-python3 tools/zmax_auto_collector.py
+cd /Users/mikeni/zmax-data-pipeline
+bash deploy_orin.sh
 ```
+
+自动完成：
+1. 创建 `~/mcap/` `~/.zmax/` 目录
+2. 部署 `orin_gateway.py` → 启动 FastAPI :8765
+3. 启动机器人（若未启动）
+4. 部署 `orin_collect.sh` → 启动 5 秒循环录制
+5. 输出验证结果
+
+### 启动 MAC 心跳
+
+```bash
+cd /Users/mikeni/lerobot-smolvla-lew
+.venv/bin/python3 tools/mac_heartbeat.py &
+```
+
+### 启动 MAC 转发器
+
+```bash
+bash /Users/mikeni/zmax-data-pipeline/mac_forwarder.sh &
+```
+
+每 5 秒检测 Orin `~/mcap/record_*.tar.gz` 新文件 → SCP 到本地 → POST 上传 4090 → 删除 Orin 文件。
 
 ## 检查运行状态
 
 ```bash
-# 一行命令检查全部
-bash /Users/mikeni/zmax-data-pipeline/check_status.sh
+# Orin 状态
+curl -s http://192.168.23.66:8765/health
+curl -s http://192.168.23.66:8765/record/status
+curl -s http://192.168.23.66:8765/disk
 
-# 输出示例:
-#   🟢 守护进程  PID=83851
-#   🟢 转发器 :8769
-#   🟢 Orin 连接  在线
-#   🟢 录制状态  采集中
-#   🟢 心跳 4090  正常
+# 后端状态
+curl -s http://datadrive.world/api/comfy/status
+
+# MAC 进程
+ps aux | grep -E "mac_heartbeat|mac_forwarder" | grep -v grep
 ```
 
-## 守护进程管理
+## 停止
 
 ```bash
-# 查看采集日志
-ps aux | grep zmax_auto
-tail -f ~/zmax_loop/*.log
-
-# 停止采集
-kill $(pgrep -f zmax_auto_collector)
-
-# 重启采集
-python3 tools/zmax_auto_collector.py &
+# 停止转发器
+pkill -f mac_forwarder
+# 停止心跳
+pkill -f mac_heartbeat
+# 停止 Orin 采集
+ssh tashan@192.168.23.66 "pkill -f orin_collect; pkill -f 'ros2 bag'"
+# 停止 FastAPI
+ssh tashan@192.168.23.66 "kill \$(lsof -ti:8765)"
 ```
 
-## 手动触发一次采集
+## Orin 存储策略
 
-```bash
-curl -s -X POST "http://192.168.23.10:8765/record/start?duration=30"
-sleep 35
-curl -s "http://192.168.23.10:8765/record/latest"
-```
+- 路径: `~/mcap/record_时间戳.tar.gz`
+- 录制时长: 5 秒
+- 缓冲区: 最多 10 个包
+- 超出则删除最旧
 
 ## 文件说明
 
-| 文件 | 用途 |
-|------|------|
-| `orin_gateway.py` | Orin FastAPI 数据服务（部署在 Orin） |
-| `mac_daemon.py` | MAC 常驻守护（心跳+转发） |
-| `zmax_cycle.sh` | 自动采集循环脚本（cron 调用） |
-| `check_status.sh` | 一行状态检查 |
-| `tools/zmax_auto_collector.py` | 自动采集守护（循环录制+上传） |
-
-## 版本
-
-当前: `v2.4.1` · 2026-07-19
+| 文件 | 部署位置 | 用途 |
+|------|---------|------|
+| `orin_gateway.py` | Orin `~/.zmax/` | FastAPI 录制/健康/磁盘端点 |
+| `orin_collect.sh` | Orin `~/.zmax/` | 5秒录制循环 |
+| `deploy_orin.sh` | MAC 本地 | 一键部署 Orin |
+| `mac_forwarder.sh` | MAC 本地 | 检测Orin新包→上传4090 |
+| `check_status.sh` | MAC 本地 | 一行状态检查 |
