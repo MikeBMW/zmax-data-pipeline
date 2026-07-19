@@ -39,7 +39,7 @@ def record_start(duration: int = 30):
     if RECORD_PROC and RECORD_PROC.poll() is None:
         return {"status": "error", "message": "already recording"}
     ts = int(time.time())
-    out = f"/tmp/zmax_{ts}"
+    out = f"/home/tashan/mcap/record_{ts}"
     cmd = f"bash -c 'source /opt/ros/humble/setup.bash && source /home/tashan/07151/tashan_robot_so_20260715_145343_07f342b_aarch64/install/setup.bash && export ROS_DOMAIN_ID=23 && timeout {duration + 5} ros2 bag record -o {out} --max-bag-duration {duration} -a'"
     RECORD_PROC = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"status": "recording", "out": out, "duration": duration, "pid": RECORD_PROC.pid}
@@ -64,7 +64,7 @@ def record_status():
 # ─── 最新录制信息 ───
 @app.get("/record/latest")
 def record_latest():
-    dirs = sorted(glob.glob("/tmp/zmax_*"), key=os.path.getmtime, reverse=True)
+    dirs = sorted(glob.glob("/home/tashan/mcap/record_*"), key=os.path.getmtime, reverse=True)
     if not dirs: return {"error": "no recordings"}
     d = dirs[0]
     name = os.path.basename(d)
@@ -74,9 +74,19 @@ def record_latest():
 # ─── 下载 ───
 @app.get("/record/download")
 def record_download():
-    dirs = sorted(glob.glob("/tmp/zmax_*"), key=os.path.getmtime, reverse=True)
+    dirs = sorted(glob.glob("/home/tashan/mcap/record_*"), key=os.path.getmtime, reverse=True)
     if not dirs: return {"error": "no recordings"}
     d = dirs[0]
+    def iter_tar():
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for f in glob.glob(f"{d}/**", recursive=True):
+                if os.path.isfile(f): tar.add(f, arcname=os.path.relpath(f, os.path.dirname(d)))
+        buf.seek(0)
+        yield from buf
+    name = os.path.basename(d)
+    return StreamingResponse(iter_tar(), media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{name}.tar.gz"'})
     def iter_tar():
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
