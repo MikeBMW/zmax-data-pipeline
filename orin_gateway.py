@@ -17,11 +17,7 @@ RECORD_PROC = None
 # ─── 健康 ───
 @app.get("/health")
 def get_health():
-    try:
-        age = time.time() - os.path.getmtime(JOINT_FILE)
-        return {"online": age < 5, "age_s": round(age, 1)}
-    except:
-        return {"online": False}
+    return {"online": True, "ts": time.time()}
 
 
 # ─── 关节 ───
