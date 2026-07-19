@@ -13,8 +13,9 @@ echo ""
 
 # 第1步: 部署 FastAPI 网关
 echo ">>> [1/5] 部署 FastAPI 网关..."
+ssh "$ORIN" "mkdir -p $ORIN_HOME/.zmax $ORIN_HOME/mcap"
 scp "$PIPE_DIR/orin_gateway.py" "$ORIN:$ORIN_HOME/.zmax/orin_gateway.py"
-ssh "$ORIN" "mkdir -p $ORIN_HOME/mcap && kill -9 \$(lsof -ti:8765) 2>/dev/null; nohup python3 $ORIN_HOME/.zmax/orin_gateway.py > /tmp/gw.log 2>&1 &"
+ssh "$ORIN" "kill -9 \$(lsof -ti:8765) 2>/dev/null; nohup python3 $ORIN_HOME/.zmax/orin_gateway.py > /tmp/gw.log 2>&1 &"
 sleep 5
 HEALTH=$(ssh "$ORIN" "curl -s http://127.0.0.1:8765/health")
 echo "  FastAPI: $HEALTH"
