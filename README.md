@@ -30,9 +30,9 @@ cd /Users/mikeni/zmax-data-pipeline
 bash deploy_orin.sh
 ```
 
-自动完成：
+自动完成（全部用本地代码，不从 GitHub 下载）：
 1. 创建 `~/mcap/` `~/.zmax/` 目录
-2. 部署 `orin_gateway.py` → 启动 FastAPI :8765
+2. SCP 本地 `orin_gateway.py` 到 Orin → 启动 FastAPI :8765
 3. 启动机器人（若未启动）
 4. 部署 `orin_collect.sh` → 启动 5 秒循环录制
 5. 输出验证结果
