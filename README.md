@@ -25,6 +25,12 @@ Orin (192.168.23.66:8765)          MAC (192.168.23.1)              4090 (datadri
 
 ### 一键部署 Orin 全套
 
+**前置：先停止 Orin 上所有旧服务**
+```bash
+ssh tashan@192.168.23.66 "pkill -f 'ros2 bag' 2>/dev/null; kill \$(lsof -ti:8765) 2>/dev/null; rm -rf ~/mcap ~/.zmax 2>/dev/null; echo '已清理'"
+```
+
+**然后部署：**
 ```bash
 cd /Users/mikeni/zmax-data-pipeline
 bash deploy_orin.sh
