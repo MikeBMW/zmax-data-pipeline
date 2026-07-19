@@ -20,12 +20,18 @@ sleep 5
 HEALTH=$(ssh "$ORIN" "curl -s http://127.0.0.1:8765/health")
 echo "  FastAPI: $HEALTH"
 
-# 第2步: 启动机器人
+# 第2步: 启动机器人（如果还没启动）
 echo ">>> [2/5] 启动机器人..."
-ssh "$ORIN" "cd $ORIN_HOME/07151/tashan_robot_so_20260715_145343_07f342b_aarch64 && source /opt/ros/humble/setup.bash && source install/setup.bash && export ROS_DOMAIN_ID=23 && nohup ros2 launch launch/start.launch.py project:=sr5_guangmokuai_100gAOI > /tmp/rl.log 2>&1 &"
-sleep 30
-TOPICS=$(ssh "$ORIN" "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=23 && ros2 topic list 2>/dev/null | wc -l")
-echo "  话题数: $TOPICS"
+TOPICS=$(ssh "$ORIN" "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=23 && timeout 10 ros2 topic list 2>/dev/null | wc -l")
+if [ "$TOPICS" -gt 0 ] 2>/dev/null; then
+    echo "  已运行（${TOPICS}话题），跳过"
+else
+    echo "  启动中，等待30秒..."
+    ssh "$ORIN" "cd $ORIN_HOME/07151/tashan_robot_so_20260715_145343_07f342b_aarch64 && source /opt/ros/humble/setup.bash && source install/setup.bash && export ROS_DOMAIN_ID=23 && timeout 40 nohup ros2 launch launch/start.launch.py project:=sr5_guangmokuai_100gAOI > /tmp/rl.log 2>&1 &"
+    sleep 30
+    TOPICS=$(ssh "$ORIN" "source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=23 && timeout 10 ros2 topic list 2>/dev/null | wc -l")
+    echo "  话题数: $TOPICS"
+fi
 
 # 第3步: 部署采集脚本
 echo ">>> [3/5] 部署采集脚本..."
