@@ -3,7 +3,7 @@
 # 用法: bash mac_forwarder.sh
 
 ORIN_SSH="tashan@192.168.23.66"
-ORIN_MCAP="/home/tashan/mcap"
+ORIN_MCAP="/home/tashan/.zmax/mcap"
 UPLOAD_URL="http://datadrive.world/api/comfy/upload"
 HISTORY_FILE="/tmp/mac_forwarder_history.txt"
 
