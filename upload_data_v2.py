@@ -32,35 +32,50 @@ def latest_mcap():
 
 
 def extract(mcap_dir):
-    """提取关节+图像帧"""
+    """提取关节+图像帧, 过滤重复静态帧"""
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     states = []
     images = []
+    JOINT_EPS = 0.02      # 关节变化阈值 (rad)
+    IMG_EPS = 8.0         # 图像均差阈值 (像素)
     with AnyReader([Path(mcap_dir)], default_typestore=typestore) as reader:
         conns = list(reader.connections)
         joint_conns = [c for c in conns if "JointState" in c.msgtype and "sim" not in c.topic]
         img_conns = [c for c in conns if "Image" in c.msgtype and "color" in c.topic]
 
+        # 第一遍: 关节帧去重 (相邻帧变化 < 阈值 → 丢弃)
+        last_pos = None
         for conn, ts, raw in reader.messages(connections=joint_conns):
             msg = reader.deserialize(raw, conn.msgtype)
             pos = list(msg.position)
-            if len(pos) >= 6 and all(-10 < v < 10 for v in pos):
-                states.append({"ts": ts, "state": [round(float(v), 4) for v in pos[:6]]})
+            if len(pos) < 6 or not all(-10 < v < 10 for v in pos):
+                continue
+            pos = [round(float(v), 4) for v in pos[:6]]
+            if last_pos is None or max(abs(a - b) for a, b in zip(pos, last_pos)) > JOINT_EPS:
+                states.append({"ts": ts, "state": pos})
+                last_pos = pos
             if len(states) >= MAX_FRAMES:
                 break
 
+        # 第二遍: 图像帧去重 (与上一张均差 < 阈值 → 丢弃)
+        last_img = None
         for conn, ts, raw in reader.messages(connections=img_conns):
             msg = reader.deserialize(raw, conn.msgtype)
             try:
                 if msg.encoding == "rgb8":
                     h, w = msg.height, msg.width
                     img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
-                    images.append({"ts": ts, "image": img})
+                    small = cv2.resize(img, (64, 64))
+                    if last_img is None or float(np.mean(np.abs(small.astype(float) - last_img.astype(float)))) > IMG_EPS:
+                        images.append({"ts": ts, "image": small})
+                        last_img = small
             except Exception:
                 pass
             if len(images) >= MAX_FRAMES:
                 break
 
+    # 统计
+    print(f"  关节帧去重后: {len(states)}, 图像帧去重后: {len(images)}")
     return states, images
 
 
