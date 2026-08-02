@@ -23,9 +23,9 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 SNAP_URL = "http://datadrive.world/api/relay/upload"
-INTERVAL = 1.0        # 1fps (恢复直播)
-JPEG_QUALITY = 60     # 更清晰
-IMG_SCALE = 0.75      # 640x480 → 480x360 (大图)
+INTERVAL = 0.25       # 4fps (相机已提速到16fps, 快照抓4fps足够流畅)
+JPEG_QUALITY = 55     # 清晰度
+IMG_SCALE = 0.75      # 424x240 → 318x180 (适中)
 
 
 class SnapshotNode(Node):
