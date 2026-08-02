@@ -41,7 +41,7 @@ def record_start(duration: int = 30):
     ts = int(time.time())
     out = f"/home/tashan/.zmax/mcap/record_{ts}"
     # 显式话题列表 (-a 在模拟话题下发现不全, 改用固定列表)
-    topics = "/real_joint_states /gripper_pos /robot/force_torque /realsense/color/image_raw /realsense/depth/image_rect_raw /joint_states"
+    topics = "/real_joint_states /gripper_pos /robot/force_torque /realsense/color/image_raw /realsense/depth/image_rect_raw /joint_states /motion/active_states"
     cmd = f"bash -c 'source /opt/ros/humble/setup.bash && export ROS_DOMAIN_ID=0 && timeout {duration + 5} ros2 bag record -o {out} --max-bag-duration {duration} {topics}'"
     RECORD_PROC = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"status": "recording", "out": out, "duration": duration, "pid": RECORD_PROC.pid}

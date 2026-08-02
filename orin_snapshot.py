@@ -22,8 +22,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-SNAP_URL = "http://datadrive.world/api/relay/upload"
-INTERVAL = 0.5        # 2fps
+SNAP_URL = "http://datadrive.world/api/orin/upload"
+INTERVAL = 1.0        # 1fps (独立通道, 不占relay主队列)
 JPEG_QUALITY = 50     # 图片更清晰
 IMG_SCALE = 0.5       # 640x480 → 320x240
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Z-MAX 数据上传 v2 · Orin侧
-MCAP → rosbags解析 → JSON包(关节+图像) → 裸POST ECS relay → 静静训练
+"""Z-MAX 数据上传 v3 · Stage-ACT 打标版
+========================================
+读取 Orin MCAP → 提取帧(关节+图像) + motion状态机标签 → 上传 relay
 
-用法 (Orin):
-  python3 upload_data_v2.py [mcap_dir]
-  python3 upload_data_v2.py            # 自动用最新mcap
+Stage ACT 支持:
+  每帧带 label (motion 状态机当前状态, 如: 取料/扫码/插入)
+  4060 训练 stage_act 时按 label 分阶段训练
 """
 import base64
 import json
@@ -24,6 +25,9 @@ RELAY = "http://datadrive.world/api/relay/upload"
 MCAP_ROOT = Path.home() / ".zmax" / "mcap"
 MAX_FRAMES = 300
 
+# motion 状态机话题 (Stage ACT 标签来源)
+MOTION_TOPIC = "/motion/active_states"
+
 
 def latest_mcap():
     dirs = sorted(MCAP_ROOT.glob("record_*"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -32,18 +36,34 @@ def latest_mcap():
 
 
 def extract(mcap_dir):
-    """提取关节+图像帧, 过滤重复静态帧"""
+    """提取关节+图像帧+motion标签, 过滤重复静态帧"""
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     states = []
     images = []
-    JOINT_EPS = 0.02      # 关节变化阈值 (rad)
-    IMG_EPS = 8.0         # 图像均差阈值 (像素)
+    motion_log = []   # (ts, label) 状态机时间线
+    JOINT_EPS = 0.02
+    IMG_EPS = 8.0
+
     with AnyReader([Path(mcap_dir)], default_typestore=typestore) as reader:
         conns = list(reader.connections)
         joint_conns = [c for c in conns if "JointState" in c.msgtype and "sim" not in c.topic]
         img_conns = [c for c in conns if "Image" in c.msgtype and "color" in c.topic]
+        motion_conns = [c for c in conns if MOTION_TOPIC in c.topic]
 
-        # 第一遍: 关节帧去重 (相邻帧变化 < 阈值 → 丢弃)
+        # 0. motion 状态机时间线
+        for conn, ts, raw in reader.messages(connections=motion_conns):
+            try:
+                msg = reader.deserialize(raw, conn.msgtype)
+                d = json.loads(msg.data)
+                # 取第一个激活状态作为标签 (通常是当前执行的)
+                states_list = d.get("states", [])
+                if states_list:
+                    label = states_list[0].split("::")[-1]
+                    motion_log.append((ts, label))
+            except Exception:
+                pass
+
+        # 1. 关节帧去重
         last_pos = None
         for conn, ts, raw in reader.messages(connections=joint_conns):
             msg = reader.deserialize(raw, conn.msgtype)
@@ -57,9 +77,8 @@ def extract(mcap_dir):
             if len(states) >= MAX_FRAMES:
                 break
 
-        # 第二遍: 图像帧去重 (与上一张均差 < 阈值 → 丢弃)
+        # 2. 图像帧去重
         last_img = None
-        last_ts = None
         for conn, ts, raw in reader.messages(connections=img_conns):
             msg = reader.deserialize(raw, conn.msgtype)
             try:
@@ -77,23 +96,47 @@ def extract(mcap_dir):
             if len(images) >= MAX_FRAMES:
                 break
 
-    # 统计
-    print(f"  关节帧去重后: {len(states)}, 图像帧去重后: {len(images)}")
+    # 3. 标签对齐: 每帧找最近时间的 motion 状态
+    motion_log.sort(key=lambda x: x[0])
+    for s in states:
+        s["label"] = nearest_label(s["ts"], motion_log)
+
+    print(f"  关节帧: {len(states)}, 图像帧: {len(images)}, motion状态: {len(motion_log)}")
     return states, images
 
 
+def nearest_label(ts, motion_log):
+    """按时间戳找最近的 motion 状态标签"""
+    if not motion_log:
+        return "IDLE"
+    # 二分找最后一个 <= ts 的标签
+    lo, hi = 0, len(motion_log) - 1
+    best = motion_log[0][1]
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if motion_log[mid][0] <= ts:
+            best = motion_log[mid][1]
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
 def build_pkg(states, images):
-    """组装 relay_train.py 期望的 JSON 包"""
+    """组装带 label 的 JSON 包 (Stage ACT 格式)"""
     frames = []
     n = min(len(states), 150)
+    label_count = {}
     for i in range(n):
-        fr = {"observation.state": states[i]["state"],
-              "action": states[i]["state"]}  # 闭环: 动作=当前状态(演示数据)
-        # 匹配最近的图像
+        fr = {
+            "observation.state": states[i]["state"],
+            "action": states[i]["state"],
+            "label": states[i].get("label", "IDLE"),   # Stage ACT 标签
+        }
+        label_count[fr["label"]] = label_count.get(fr["label"], 0) + 1
         img = images[i]["image"] if i < len(images) else None
         if img is not None:
-            small = cv2.resize(img, (64, 64))
-            ok, buf = cv2.imencode(".jpg", small)
+            ok, buf = cv2.imencode(".jpg", img)
             if ok:
                 fr["camera_b64"] = base64.b64encode(buf.tobytes()).decode()
         frames.append(fr)
@@ -105,6 +148,8 @@ def build_pkg(states, images):
             "n_joint": len(states[0]["state"]) if states else 6,
             "n_action": len(states[0]["state"]) if states else 6,
             "fps": 30,
+            "stage_act": True,
+            "labels": label_count,      # 标签分布
             "time": time.time(),
         },
         "frames": frames,
@@ -132,12 +177,12 @@ def main():
     print(f"📁 MCAP: {mcap_dir}")
 
     states, images = extract(mcap_dir)
-    print(f"🔬 关节帧: {len(states)}, 图像帧: {len(images)}")
     if not states:
         print("❌ 无关节数据")
         return
 
     pkg = build_pkg(states, images)
+    print(f"🏷️  标签分布: {pkg['meta'].get('labels')}")
     upload(pkg)
 
 
