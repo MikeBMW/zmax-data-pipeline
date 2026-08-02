@@ -89,8 +89,8 @@ class SnapshotNode(Node):
                 img = np.frombuffer(m.data, dtype=np.uint8).reshape(m.height, m.width, 3)
                 if m.encoding == "rgb8":
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                # 相机安装方向修正: 图像翻转 180°
-                img = cv2.rotate(img, cv2.ROTATE_180)
+                # 相机安装方向修正: 图像翻转 180° (flip -1 = 水平+垂直)
+                img = cv2.flip(img, -1)
                 # 缩小 (文字不叠加, 图片可稍大)
                 small = cv2.resize(img, None, fx=IMG_SCALE, fy=IMG_SCALE,
                                    interpolation=cv2.INTER_AREA)
