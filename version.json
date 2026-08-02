@@ -1,18 +1,22 @@
 {
   "project": "Z-MAX Data Pipeline",
-  "version": "v2.3-auto-0719",
-  "date": "2026-07-19",
+  "version": "v2.6.0",
+  "date": "2026-08-02",
   "maintainer": "小芳 (Hermes)",
   "status": "running",
+  "release_note": "中版本迭代: 相机直读16fps + 快照直播v3 + Stage-ACT动作打标 + 状态高亮",
   "components": {
     "orin_gateway": {"port": 8765, "status": "online"},
-    "mac_daemon": {"port": 8766, "status": "running", "pid": 52953},
-    "mac_forwarder": {"port": 8769, "status": "running"},
-    "heartbeat_4090": {"url": "datadrive.world", "status": "ok"}
+    "orin_infer_service": {"port": 8766, "status": "online"},
+    "orin_cam15": {"fps": 16, "status": "online"},
+    "orin_snapshot": {"fps": 4, "status": "online"},
+    "orin_field_status": {"status": "online"},
+    "relay": {"url": "datadrive.world/api/relay", "status": "ok"}
   },
-  "cycle": {
-    "duration_s": 30,
-    "auto_upload": true,
-    "last_run": null
+  "features": {
+    "camera_direct_read": "pyrealsense2 直读 D405 16fps (替代产线1.5fps)",
+    "live_snapshot": "4fps 直播 + current_state/all_states 高亮字段",
+    "stage_act_labeling": "motion状态机标签对齐, 每帧带label",
+    "static_frame_filter": "关节0.01rad+200ms窗口去重, 图像8px去重"
   }
 }
