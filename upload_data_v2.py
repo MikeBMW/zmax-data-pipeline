@@ -132,11 +132,17 @@ def build_pkg(states, images):
     frames = []
     n = min(len(states), 150)
     label_count = {}
+    # 时间戳基准: 第一帧 ts (ns) → 秒
+    t0 = states[0]["ts"] / 1e9 if states and states[0].get("ts") else 0
     for i in range(n):
         fr = {
             "observation.state": states[i]["state"],
             "action": states[i]["state"],
             "label": states[i].get("label", "IDLE"),   # Stage ACT 标签
+            # LeRobot 必需字段 (静静 build 脚本依赖):
+            "timestamp": (states[i]["ts"] / 1e9 - t0) if states[i].get("ts") else i / 30.0,
+            "frame_index": i,
+            "episode_index": 0,
         }
         label_count[fr["label"]] = label_count.get(fr["label"], 0) + 1
         img = images[i]["image"] if i < len(images) else None
