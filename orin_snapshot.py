@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Orin 现场快照服务 · 每10秒拍一帧上传ECS供cicd.html直播
-====================================================
-从 ROS2 /realsense/color/image_raw 读帧 → JPEG压缩 → 上传ECS
-cicd.html 轮询显示最新照片 (10秒刷新 = 现场直播)
+"""Orin 现场快照服务 v3 · 动作联动
+========================================
+- 监听 motion 状态机 (active_states / active_transition)
+- 动作开始时立即拍照
+- 平时 1fps 刷新
+- 把当前动作文本写到图像上
+- JPEG 压缩上传 ECS (relay peek 供 cicd.html 显示)
 
 用法 (Orin, 需source ROS):
   python3 orin_snapshot.py
 """
 import base64
-import io
 import json
 import time
 import urllib.request
@@ -18,63 +20,138 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
+from PIL import Image as PILImage, ImageDraw, ImageFont
 
-SNAP_URL = "http://datadrive.world/api/relay/upload"   # 上传通道
-INTERVAL = 10   # 秒/张
-JPEG_QUALITY = 60  # 压缩质量 (0-100, 越小越省流量)
+SNAP_URL = "http://datadrive.world/api/relay/upload"
+INTERVAL = 0.5        # 2fps
+JPEG_QUALITY = 35     # 更小
+IMG_SCALE = 0.35      # 640x480 → 224x168
+FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"
 
 
 class SnapshotNode(Node):
     def __init__(self):
-        super().__init__("snapshot_service")
+        super().__init__("snapshot_service_v3")
         self.latest = None
         self.latest_ts = 0
+        self.motion_states = []        # 当前激活状态机
+        self.last_transition = None    # 最近一次转移
+        self.last_transition_ts = 0
+        self.infer_count = 0
+
         self.sub = self.create_subscription(Image, "/realsense/color/image_raw", self.on_img, 10)
+        self.sub_states = self.create_subscription(String, "/motion/active_states", self.on_states, 10)
+        self.sub_trans = self.create_subscription(String, "/motion/active_transition", self.on_trans, 10)
 
     def on_img(self, msg):
         self.latest = msg
         self.latest_ts = time.time()
 
+    def on_states(self, msg):
+        try:
+            d = json.loads(msg.data)
+            self.motion_states = d.get("states", [])
+        except Exception:
+            pass
+
+    def on_trans(self, msg):
+        try:
+            d = json.loads(msg.data)
+            self.last_transition = d
+            self.last_transition_ts = time.time()
+        except Exception:
+            pass
+
+    def current_action(self):
+        """提取当前动作名 (状态机路径最后一段)"""
+        if self.motion_states:
+            names = []
+            for s in self.motion_states:
+                name = s.split("::")[-1] if "::" in s else s.split("/")[-1]
+                names.append(name)
+            return " + ".join(names)
+        return "IDLE"
+
+    def transition_text(self):
+        """最近的转移描述"""
+        if self.last_transition and time.time() - self.last_transition_ts < 5:
+            frm = self.last_transition.get("from", "").split("::")[-1]
+            to = self.last_transition.get("to", "").split("::")[-1]
+            return f"{frm} → {to}"
+        return None
+
     def grab_jpeg(self):
-        """取最新帧 → JPEG bytes"""
+        """取最新帧 → 画动作文本 → JPEG"""
         if self.latest is None:
-            return None
+            return None, None
         m = self.latest
         try:
             if m.encoding in ("bgr8", "rgb8"):
                 img = np.frombuffer(m.data, dtype=np.uint8).reshape(m.height, m.width, 3)
                 if m.encoding == "rgb8":
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                # 压缩
-                ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                # 相机安装方向修正: 图像翻转 180°
+                img = cv2.rotate(img, cv2.ROTATE_180)
+                # 缩小
+                small = cv2.resize(img, None, fx=IMG_SCALE, fy=IMG_SCALE,
+                                   interpolation=cv2.INTER_AREA)
+
+                # 动作文本 (PIL 支持中文)
+                action = self.current_action()
+                trans = self.transition_text()
+                h, w = small.shape[:2]
+
+                # 转 PIL 画中文
+                pil_img = PILImage.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(pil_img)
+                try:
+                    font_big = ImageFont.truetype(FONT_PATH, 14)
+                    font_small = ImageFont.truetype(FONT_PATH, 11)
+                except Exception:
+                    font_big = font_small = ImageFont.load_default()
+
+                # 顶部信息栏 (半透明黑底)
+                overlay = pil_img.copy()
+                draw.rectangle([0, 0, w, 34], fill=(0, 0, 0))
+                pil_img = PILImage.blend(overlay, pil_img, 0.6)
+                draw = ImageDraw.Draw(pil_img)
+
+                draw.text((5, 2), f"动作: {action}", font=font_big, fill=(0, 255, 0))
+                draw.text((w - 70, 6), time.strftime('%H:%M:%S'), font=font_small, fill=(255, 255, 255))
+                if trans:
+                    draw.text((5, 19), f"转: {trans}", font=font_small, fill=(0, 200, 255))
+
+                small = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+                ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                 if ok:
-                    return buf.tobytes()
+                    return buf.tobytes(), action
         except Exception as e:
             print(f"⚠️ 图像处理失败: {e}")
-        return None
+        return None, None
 
 
-def upload_snapshot(jpeg_bytes, ts):
-    """上传快照到 ECS (JSON包格式)"""
+def upload_snapshot(jpeg_bytes, action, ts):
     pkg = {
-        "meta": {"source": "orin_snapshot", "time": ts, "type": "camera_snapshot"},
+        "meta": {"source": "orin_snapshot", "time": ts, "type": "camera_snapshot",
+                 "action": action},
         "snapshot_b64": base64.b64encode(jpeg_bytes).decode(),
         "timestamp": ts,
+        "action": action,
     }
     data = json.dumps(pkg).encode()
     req = urllib.request.Request(SNAP_URL, data=data,
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.read().decode()[:100]
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode()[:80]
     except Exception as e:
         return f"ERR: {e}"
 
 
 def main():
-    print("=== Orin 现场快照服务 ===")
-    print(f"间隔: {INTERVAL}s · JPEG质量: {JPEG_QUALITY}")
-
+    print("=== Orin 现场快照 v3 (动作联动 1fps) ===")
     rclpy.init()
     node = SnapshotNode()
 
@@ -85,17 +162,20 @@ def main():
 
     print("⏳ 等待相机帧...")
     while node.latest is None:
-        time.sleep(1)
-    print("✅ 相机已连接, 开始快照")
+        time.sleep(0.5)
+    print("✅ 相机已连接")
 
+    last_action = None
     while rclpy.ok():
         ts = time.time()
-        jpeg = node.grab_jpeg()
+        jpeg, action = node.grab_jpeg()
         if jpeg:
-            result = upload_snapshot(jpeg, ts)
-            print(f"[{time.strftime('%H:%M:%S')}] 📸 {len(jpeg)/1024:.0f}KB → {result}", flush=True)
-        else:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ 无帧", flush=True)
+            # 动作变化 → 立即上传; 平时 1fps
+            action_changed = (action != last_action)
+            result = upload_snapshot(jpeg, action, ts)
+            flag = "⚡动作变化" if action_changed else "   "
+            print(f"[{time.strftime('%H:%M:%S')}] {flag} {action} {len(jpeg)/1024:.0f}KB → {result}", flush=True)
+            last_action = action
         time.sleep(INTERVAL)
 
     node.destroy_node()
