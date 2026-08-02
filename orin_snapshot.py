@@ -36,6 +36,7 @@ class SnapshotNode(Node):
         self.motion_states = []        # 当前激活状态机
         self.last_transition = None    # 最近一次转移
         self.last_transition_ts = 0
+        self.current_state = None      # 当前状态 (从transition.to提取)
         self.infer_count = 0
 
         self.sub = self.create_subscription(Image, "/realsense/color/image_raw", self.on_img, 10)
@@ -58,6 +59,9 @@ class SnapshotNode(Node):
             d = json.loads(msg.data)
             self.last_transition = d
             self.last_transition_ts = time.time()
+            # 当前状态 = 转移的 to 字段 (中文/英文名)
+            to_full = d.get("to", "")
+            self.current_state = to_full.split("::")[-1] if "::" in to_full else to_full
         except Exception:
             pass
 
@@ -70,6 +74,15 @@ class SnapshotNode(Node):
                 names.append(name)
             return " + ".join(names)
         return "IDLE"
+
+    def all_state_names(self):
+        """全量状态名列表 (去重)"""
+        seen = []
+        for s in self.motion_states:
+            name = s.split("::")[-1] if "::" in s else s.split("/")[-1]
+            if name not in seen:
+                seen.append(name)
+        return seen
 
     def transition_text(self):
         """最近的转移描述"""
@@ -103,13 +116,15 @@ class SnapshotNode(Node):
         return None, None
 
 
-def upload_snapshot(jpeg_bytes, action, ts):
+def upload_snapshot(jpeg_bytes, action, ts, node):
     pkg = {
         "meta": {"source": "orin_snapshot", "time": ts, "type": "camera_snapshot",
                  "action": action},
         "snapshot_b64": base64.b64encode(jpeg_bytes).decode(),
         "timestamp": ts,
         "action": action,
+        "current_state": node.current_state,          # 当前状态 (高亮)
+        "all_states": node.all_state_names(),         # 全量状态 (弱化)
     }
     data = json.dumps(pkg).encode()
     req = urllib.request.Request(SNAP_URL, data=data,
@@ -143,7 +158,7 @@ def main():
         if jpeg:
             # 动作变化 → 立即上传; 平时 1fps
             action_changed = (action != last_action)
-            result = upload_snapshot(jpeg, action, ts)
+            result = upload_snapshot(jpeg, action, ts, node)
             flag = "⚡动作变化" if action_changed else "   "
             print(f"[{time.strftime('%H:%M:%S')}] {flag} {action} {len(jpeg)/1024:.0f}KB → {result}", flush=True)
             last_action = action
