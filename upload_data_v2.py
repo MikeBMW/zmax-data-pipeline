@@ -55,10 +55,10 @@ def extract(mcap_dir):
             try:
                 msg = reader.deserialize(raw, conn.msgtype)
                 d = json.loads(msg.data)
-                # 取第一个激活状态作为标签 (通常是当前执行的)
+                # 取最后一个激活状态作为标签 (数组是累积的, 最后=最新)
                 states_list = d.get("states", [])
                 if states_list:
-                    label = states_list[0].split("::")[-1]
+                    label = states_list[-1].split("::")[-1]
                     motion_log.append((ts, label))
             except Exception:
                 pass

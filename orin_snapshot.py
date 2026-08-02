@@ -66,13 +66,11 @@ class SnapshotNode(Node):
             pass
 
     def current_action(self):
-        """提取当前动作名 (状态机路径最后一段)"""
+        """提取当前动作名 (状态机路径最后一段, 取最新激活)"""
         if self.motion_states:
-            names = []
-            for s in self.motion_states:
-                name = s.split("::")[-1] if "::" in s else s.split("/")[-1]
-                names.append(name)
-            return " + ".join(names)
+            # states 数组是累积的, 最后一个是当前状态
+            s = self.motion_states[-1]
+            return s.split("::")[-1] if "::" in s else s.split("/")[-1]
         return "IDLE"
 
     def all_state_names(self):
