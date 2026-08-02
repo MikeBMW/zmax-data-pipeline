@@ -77,7 +77,9 @@ def main():
                 is_big = size and size > 10_000_000
                 # 数据包特征: source=orin + frames 数组
                 is_data = src == "orin" and "frames" in pkg
-                if name not in seen and (is_model_name or (is_big and not is_data)):
+                # meta 包黑名单 (静静上传时附带的 JSON 元数据, size 字段伪装)
+                is_meta = "deploy_meta" in name or "meta" in name.lower() and name.endswith(".json")
+                if name not in seen and (is_model_name or (is_big and not is_data)) and not is_meta:
                     seen.add(name)
                     print(f"🔍 候选模型包: {name} (size={size}, src={src})", flush=True)
                     deploy_model()
