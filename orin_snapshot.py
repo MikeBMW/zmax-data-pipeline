@@ -22,10 +22,10 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-SNAP_URL = "http://datadrive.world/api/orin/upload"
-INTERVAL = 1.0        # 1fps (独立通道, 不占relay主队列)
-JPEG_QUALITY = 50     # 图片更清晰
-IMG_SCALE = 0.5       # 640x480 → 320x240
+SNAP_URL = "http://datadrive.world/api/relay/upload"
+INTERVAL = 1.0        # 1fps (恢复直播)
+JPEG_QUALITY = 60     # 更清晰
+IMG_SCALE = 0.75      # 640x480 → 480x360 (大图)
 
 
 class SnapshotNode(Node):
