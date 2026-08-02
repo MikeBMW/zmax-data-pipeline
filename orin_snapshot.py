@@ -21,13 +21,11 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
-from PIL import Image as PILImage, ImageDraw, ImageFont
 
 SNAP_URL = "http://datadrive.world/api/relay/upload"
 INTERVAL = 0.5        # 2fps
-JPEG_QUALITY = 35     # 更小
-IMG_SCALE = 0.35      # 640x480 → 224x168
-FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"
+JPEG_QUALITY = 50     # 图片更清晰
+IMG_SCALE = 0.5       # 640x480 → 320x240
 
 
 class SnapshotNode(Node):
@@ -93,40 +91,13 @@ class SnapshotNode(Node):
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 # 相机安装方向修正: 图像翻转 180°
                 img = cv2.rotate(img, cv2.ROTATE_180)
-                # 缩小
+                # 缩小 (文字不叠加, 图片可稍大)
                 small = cv2.resize(img, None, fx=IMG_SCALE, fy=IMG_SCALE,
                                    interpolation=cv2.INTER_AREA)
 
-                # 动作文本 (PIL 支持中文)
-                action = self.current_action()
-                trans = self.transition_text()
-                h, w = small.shape[:2]
-
-                # 转 PIL 画中文
-                pil_img = PILImage.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
-                draw = ImageDraw.Draw(pil_img)
-                try:
-                    font_big = ImageFont.truetype(FONT_PATH, 14)
-                    font_small = ImageFont.truetype(FONT_PATH, 11)
-                except Exception:
-                    font_big = font_small = ImageFont.load_default()
-
-                # 顶部信息栏 (半透明黑底)
-                overlay = pil_img.copy()
-                draw.rectangle([0, 0, w, 34], fill=(0, 0, 0))
-                pil_img = PILImage.blend(overlay, pil_img, 0.6)
-                draw = ImageDraw.Draw(pil_img)
-
-                draw.text((5, 2), f"动作: {action}", font=font_big, fill=(0, 255, 0))
-                draw.text((w - 70, 6), time.strftime('%H:%M:%S'), font=font_small, fill=(255, 255, 255))
-                if trans:
-                    draw.text((5, 19), f"转: {trans}", font=font_small, fill=(0, 200, 255))
-
-                small = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
                 ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                 if ok:
-                    return buf.tobytes(), action
+                    return buf.tobytes(), self.current_action()
         except Exception as e:
             print(f"⚠️ 图像处理失败: {e}")
         return None, None
