@@ -41,7 +41,7 @@ def extract(mcap_dir):
     states = []
     images = []
     motion_log = []   # (ts, label) 状态机时间线
-    JOINT_EPS = 0.02
+    JOINT_EPS = 0.01     # 关节变化阈值 (rad) — 0.02偏严, 慢动作帧被滤掉
     IMG_EPS = 8.0
 
     with AnyReader([Path(mcap_dir)], default_typestore=typestore) as reader:
@@ -63,17 +63,22 @@ def extract(mcap_dir):
             except Exception:
                 pass
 
-        # 1. 关节帧去重
+        # 1. 关节帧去重 (累计变化采样 + 时间窗口: 至少200ms一帧)
         last_pos = None
+        last_sampled_ts = 0
+        MIN_INTERVAL_NS = 200_000_000  # 200ms
         for conn, ts, raw in reader.messages(connections=joint_conns):
             msg = reader.deserialize(raw, conn.msgtype)
             pos = list(msg.position)
             if len(pos) < 6 or not all(-10 < v < 10 for v in pos):
                 continue
             pos = [round(float(v), 4) for v in pos[:6]]
-            if last_pos is None or max(abs(a - b) for a, b in zip(pos, last_pos)) > JOINT_EPS:
+            changed = last_pos is None or max(abs(a - b) for a, b in zip(pos, last_pos)) > JOINT_EPS
+            time_ok = ts - last_sampled_ts >= MIN_INTERVAL_NS
+            if changed or time_ok:
                 states.append({"ts": ts, "state": pos})
                 last_pos = pos
+                last_sampled_ts = ts
             if len(states) >= MAX_FRAMES:
                 break
 
