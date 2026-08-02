@@ -63,7 +63,7 @@ def deploy_model():
 
 
 def main():
-    print("=== 自动部署监听 (30秒轮询) ===")
+    print("=== 自动部署监听 v2 (30秒轮询) ===")
     while True:
         try:
             pkg = peek()
@@ -72,14 +72,17 @@ def main():
                 src = meta.get("source", "?")
                 size = meta.get("size") or 0
                 name = pkg.get("_peek", {}).get("name", "?")
-                # 模型包特征: 非快照 + 大文件
-                if src not in ("orin_snapshot", "orin") and name not in seen:
+                # 模型包特征: 任意包, 只要 size 大 或名字带 npz/safetensors
+                is_model_name = "npz" in name or "safetensors" in name or "bin" in name
+                is_big = size and size > 10_000_000
+                # 数据包特征: source=orin + frames 数组
+                is_data = src == "orin" and "frames" in pkg
+                if name not in seen and (is_model_name or (is_big and not is_data)):
                     seen.add(name)
-                    if "npz" in name or "safetensors" in name or size and size > 10_000_000:
-                        print(f"🔍 发现模型包: {name} ({size}B)")
-                        deploy_model()
+                    print(f"🔍 候选模型包: {name} (size={size}, src={src})", flush=True)
+                    deploy_model()
         except Exception as e:
-            print(f"⚠️ {e}")
+            print(f"⚠️ {e}", flush=True)
         time.sleep(30)
 
 
