@@ -24,6 +24,8 @@ from rosbags.typesys import Stores, get_typestore
 RELAY = "http://datadrive.world/api/relay/upload"
 MCAP_ROOT = Path.home() / ".zmax" / "mcap"
 MAX_FRAMES = 300
+IMG_W, IMG_H = 320, 240   # 高清图像 (原64x64 → 320x240, 训练视觉质量提升)
+IMG_QUALITY = 75          # JPEG质量
 
 # motion 状态机话题 (Stage ACT 标签来源)
 MOTION_TOPIC = "/motion/active_states"
@@ -92,7 +94,7 @@ def extract(mcap_dir):
                     img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
                     if msg.encoding == "bgr8":
                         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    small = cv2.resize(img, (64, 64))
+                    small = cv2.resize(img, (IMG_W, IMG_H))
                     if last_img is None or float(np.mean(np.abs(small.astype(float) - last_img.astype(float)))) > IMG_EPS:
                         images.append({"ts": ts, "image": small})
                         last_img = small
@@ -147,7 +149,7 @@ def build_pkg(states, images):
         label_count[fr["label"]] = label_count.get(fr["label"], 0) + 1
         img = images[i]["image"] if i < len(images) else None
         if img is not None:
-            ok, buf = cv2.imencode(".jpg", img)
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, IMG_QUALITY])
             if ok:
                 fr["camera_b64"] = base64.b64encode(buf.tobytes()).decode()
         frames.append(fr)
