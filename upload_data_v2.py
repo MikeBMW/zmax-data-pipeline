@@ -59,12 +59,15 @@ def extract(mcap_dir):
 
         # 第二遍: 图像帧去重 (与上一张均差 < 阈值 → 丢弃)
         last_img = None
+        last_ts = None
         for conn, ts, raw in reader.messages(connections=img_conns):
             msg = reader.deserialize(raw, conn.msgtype)
             try:
-                if msg.encoding == "rgb8":
+                if msg.encoding in ("rgb8", "bgr8"):
                     h, w = msg.height, msg.width
                     img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
+                    if msg.encoding == "bgr8":
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     small = cv2.resize(img, (64, 64))
                     if last_img is None or float(np.mean(np.abs(small.astype(float) - last_img.astype(float)))) > IMG_EPS:
                         images.append({"ts": ts, "image": small})
