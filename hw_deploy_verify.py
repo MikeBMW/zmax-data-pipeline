@@ -40,11 +40,11 @@ def fetch_model(url, dst):
 
 
 def load_act_model(path):
-    """加载 ACT 模型 (支持 safetensors / pt)"""
+    """加载 ACT 模型 (支持 safetensors / pt / bin / npz)"""
     from orin_act_standalone import build_act_from_ckpt
-    if path.endswith(".safetensors"):
-        # 直接加载
-        return build_act_from_ckpt()
+    if path.endswith((".safetensors", ".bin", ".npz")):
+        # safetensors 格式 (npz 实际也是 safetensors 头部)
+        return build_act_from_ckpt(path)
     elif path.endswith(".pt"):
         # 训练输出 (可能是 state_dict 或完整模型)
         sd = torch.load(path, map_location=DEV, weights_only=True)
@@ -55,9 +55,21 @@ def load_act_model(path):
         raise ValueError(f"不支持的模型格式: {path}")
 
 
-def run_inference(act, frames=20, use_camera=False):
+def run_inference(act, frames=20, use_camera=False, state_dim=None, out_dim=None):
     """推理 N 帧, 统计性能"""
     act.to(DEV).eval()
+
+    # 从模型权重推断输入维度
+    if state_dim is None:
+        try:
+            state_dim = act.encoder_robot_state_input_proj.weight.shape[1]
+        except AttributeError:
+            state_dim = 14
+    if out_dim is None:
+        try:
+            out_dim = act.action_head.weight.shape[0]
+        except AttributeError:
+            out_dim = 6
 
     results = {
         "device": DEV,
@@ -65,6 +77,8 @@ def run_inference(act, frames=20, use_camera=False):
         "avg_ms": 0.0,
         "action_min": 0.0,
         "action_max": 0.0,
+        "state_dim": state_dim,
+        "out_dim": out_dim,
         "valid": False,
     }
 
@@ -73,7 +87,7 @@ def run_inference(act, frames=20, use_camera=False):
     for i in range(frames):
         # 输入: 模拟图像+关节 (或真实相机)
         img = torch.randn(1, 3, 480, 640, device=DEV)
-        state = torch.randn(1, 14, device=DEV)
+        state = torch.randn(1, state_dim, device=DEV)
 
         t0 = time.time()
         with torch.no_grad():

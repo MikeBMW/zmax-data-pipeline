@@ -152,11 +152,13 @@ class ACT(nn.Module):
         return actions
 
 
-def build_act_from_ckpt():
+def build_act_from_ckpt(ckpt_path=None):
     """从 safetensors 权重推断网络结构并加载"""
     from safetensors.torch import load_file
 
-    sd = load_file(f"{ACT_DIR}/model.safetensors")
+    if ckpt_path is None:
+        ckpt_path = f"{ACT_DIR}/model.safetensors"
+    sd = load_file(ckpt_path)
 
     # 从权重推断维度
     hidden = sd["model.action_head.weight"].shape[1]
