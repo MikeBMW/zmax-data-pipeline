@@ -44,8 +44,18 @@ def load_model():
     return act
 
 
+def get_sys_info():
+    """Orin 系统指标 (web 标准脚本 orin_sys_status.py, 纯只读)"""
+    try:
+        sys.path.insert(0, os.path.expanduser("~/.zmax"))
+        from orin_sys_status import get_sys_info as _g
+        return _g()
+    except Exception:
+        return {}
+
+
 def heartbeat_loop():
-    """每5秒上报 ECS"""
+    """每5秒上报 ECS (含系统指标)"""
     while True:
         try:
             payload = json.dumps({
@@ -53,6 +63,7 @@ def heartbeat_loop():
                 "model": model_name,
                 "infer_count": infer_count,
                 "last_infer_ms": last_infer_ms,
+                "sys": get_sys_info(),
             }).encode()
             req = urllib.request.Request(HB_URL, data=payload,
                                          headers={"Content-Type": "application/json"},
