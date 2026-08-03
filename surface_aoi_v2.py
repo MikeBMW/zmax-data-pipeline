@@ -1,12 +1,13 @@
 """
-Z-MAX 金手指检测 AOI 程序 · 优化版 v2 (10082)
+Z-MAX 表面检测 AOI 程序 · 优化版 v3 (10083)
 ============================================
-基于原版优化，接口完全兼容 POST /capture_detect。
+纯异步方案: 拍照后立即返回 success, 检测后台并行, 结果只打印终端。
+动作调用零耽误, 推理不阻塞产线节奏。
 
 核心优化:
-  1. 【性能】相机常驻: 启动即打开, 请求只Grab, 秒级响应 (原版每次开关相机60-90s)
+  1. 【性能】相机常驻: 启动即打开, 请求只Grab, 秒级响应
   2. 【修复】增益设置失败(100100010): 自动探测相机增益范围, 容错降级不阻塞
-  3. 【关键】恢复检测结果返回: detect_count/detections 回传, 产线状态机可判定
+  3. 【异步】检测并行: 拍照完立即返回 success, 推理后台线程跑, 结果打印终端
   4. 【优化】设备枚举缓存: 只枚举一次, 后续直接打开
   5. 【健壮】异常自动重连相机 + 资源释放保证
 
@@ -288,75 +289,42 @@ def GrabAndSaveImage():
 
 global_img_count = 1
 
-
-# 【优化6】4步流水线自动策略: 间隔感知分组
-# 规则: 连续短间隔(<60s)调用视为同一轮; 长间隔(>=60s)=新一轮开始(自动重置)
-# 表面检测(AOI_3/4/5/6)在金手指检测之后, 两轮之间间隔很长 → 天然分组
-PIPELINE_STEPS = 4            # 每轮调用步数
-SHORT_INTERVAL = 60.0         # 同轮判定阈值(秒): 小于=同一轮, 大于=新轮
-_pipeline_lock = threading.Lock()
-_pipeline_seq = 0             # 当前轮第几步 (1-4)
-_pipeline_last_ts = 0.0       # 上次调用时间戳
-_pipeline_results = []        # 已完成的检测结果 [{step, detect_count, detections, ng}]
-_pipeline_threads = []        # 后台检测线程
+# 【异步】后台检测线程: 拍照后立即返回, 检测并行跑, 结果打印终端
+_detect_lock = threading.Lock()
+_detect_count = 0          # 累计检测次数
 
 
-def _pipeline_advance():
-    """间隔感知步进: 返回 (step, is_new_round)"""
-    global _pipeline_seq, _pipeline_last_ts
-    now = time.time()
-    with _pipeline_lock:
-        is_new = (now - _pipeline_last_ts) > SHORT_INTERVAL or _pipeline_seq >= PIPELINE_STEPS
-        if is_new:
-            # 新一轮: 重置计数 + 清空上一轮残留
-            _pipeline_seq = 0
-            _pipeline_results.clear()
-            _pipeline_threads.clear()
-        _pipeline_seq += 1
-        step = _pipeline_seq
-        _pipeline_last_ts = now
-    return step, is_new
-
-
-def _detect_worker(topview_path, detect_type, step):
-    """后台线程: 检测并记录结果"""
+def _async_detect(topview_path, origin_path, detect_type):
+    """后台线程: 推理检测, 结果打印到终端"""
+    global _detect_count
     try:
+        t0 = time.time()
         result = detector.detect(topview_path, detect_type=detect_type)
+        dt_ms = (time.time() - t0) * 1000
         dets = result.get("detections", [])
-        with _pipeline_lock:
-            _pipeline_results.append({
-                "step": step,
-                "detect_count": result.get("detect_count", 0),
-                "detections": dets,
-                "ng": len(dets) > 0,          # 有检出=NG
-                "saved_incoming": result.get("saved_incoming"),
-            })
-        print(f"   └─ [step{step}] 检测完成: {len(dets)}个缺陷, {'NG' if dets else 'OK'}")
+        with _detect_lock:
+            _detect_count += 1
+            n = _detect_count
+        print("\n" + "=" * 60)
+        print(f"【检测结果 #{n}】{CAM_DESC} 推理耗时 {dt_ms:.0f}ms")
+        print(f"  原图:   {origin_path}")
+        print(f"  俯视图: {topview_path}")
+        print(f"  缺陷数: {len(dets)}  {'❌ NG' if dets else '✅ OK'}")
+        for i, d in enumerate(dets):
+            cls = d.get("class_name", d.get("name", "?"))
+            conf = d.get("confidence", d.get("conf", 0))
+            bbox = d.get("bbox", d.get("box", "?"))
+            print(f"    [{i+1}] {cls} conf={conf:.2f} bbox={bbox}")
+        if result.get("saved_incoming"):
+            print(f"  存档: {result['saved_incoming']}")
+        print("=" * 60 + "\n", flush=True)
     except Exception as e:
-        print(f"   └─ [step{step}] 检测异常: {e}")
-        with _pipeline_lock:
-            _pipeline_results.append({"step": step, "detect_count": 0,
-                                      "detections": [], "ng": True, "error": str(e)})
-
-
-def _pipeline_collect():
-    """收集并清空当前轮结果"""
-    global _pipeline_seq
-    with _pipeline_lock:
-        threads = list(_pipeline_threads)
-    for th in threads:
-        th.join(timeout=60)
-    with _pipeline_lock:
-        results = sorted(_pipeline_results, key=lambda x: x.get("step", 0))
-        _pipeline_results.clear()
-        _pipeline_threads.clear()
-        _pipeline_seq = 0
-    return results
+        print(f"【检测异常】{e}")
+        traceback.print_exc()
 
 
 @app.route("/capture_detect", methods=["POST"])
 def capture_detect_api():
-    global _pipeline_seq
     try:
         detect_type, channel_port = _resolve_detect_type_by_channel()
         if not detect_type:
@@ -381,58 +349,15 @@ def capture_detect_api():
             if img_origin_path is None or img_topview_path is None:
                 return jsonify({"code": 500, "msg": "图像抓取失败"}), 500
 
-        with _pipeline_lock:
-            step, is_new = _pipeline_advance()
+        print(f"   📸 已拍照, 启动后台检测 (不阻塞动作)")
 
-        if is_new:
-            print(f"   ┌─ [新一轮] 检测轮开始 (step1/{PIPELINE_STEPS})")
-        print(f"   ┌─ [step{step}/{PIPELINE_STEPS}] 已拍照, 启动检测...")
-
-        # 启动后台检测线程 (拍照已同步完成, 检测异步跑)
-        t = threading.Thread(target=_detect_worker,
-                             args=(img_topview_path, detect_type, step), daemon=True)
-        with _pipeline_lock:
-            _pipeline_threads.append(t)
+        # 【异步】后台检测: 立即返回, 推理并行跑
+        t = threading.Thread(target=_async_detect,
+                             args=(img_topview_path, img_origin_path, detect_type), daemon=True)
         t.start()
 
-        if step < PIPELINE_STEPS:
-            # 前3步: 立即放行 (返回success, 检测在后台并行)
-            return jsonify({
-                "code": 200,
-                "msg": "success",
-                "step": step,
-                "total_steps": PIPELINE_STEPS,
-                "async": True,                 # 标记: 检测后台进行中
-                "camera_desc": CAM_DESC,
-                "sn": TARGET_SN,
-                "origin_image_path": img_origin_path,
-                "topview_image_path": img_topview_path,
-            })
-        else:
-            # 第4步: 等待所有后台检测完成, 汇总最终结果
-            print(f"   └─ [step{step}] 本轮最后一步: 等待全部检测完成...")
-            results = _pipeline_collect()
-
-            # 汇总: 任一步有缺陷 → NG
-            all_ng = [r for r in results if r.get("ng")]
-            final_ng = len(all_ng) > 0
-            total_det = sum(r.get("detect_count", 0) for r in results)
-            print(f"   └─ [最终] {'NG ❌' if final_ng else 'OK ✅'} ({len(results)}步, {total_det}缺陷)")
-
-            return jsonify({
-                "code": 200,
-                "msg": "ng" if final_ng else "success",
-                "final": True,                 # 标记: 最终汇总结果
-                "step": step,
-                "total_steps": PIPELINE_STEPS,
-                "result": "NG" if final_ng else "OK",
-                "steps": results,              # 每步明细
-                "detect_count": total_det,
-                "camera_desc": CAM_DESC,
-                "sn": TARGET_SN,
-                "origin_image_path": img_origin_path,
-                "topview_image_path": img_topview_path,
-            })
+        # 立即返回 success, 保证动作连贯执行
+        return jsonify({"code": 200, "msg": "success"})
     except Exception as e:
         print("==========接口异常完整堆栈==========")
         traceback.print_exc()
@@ -449,7 +374,7 @@ def run_flask():
 
 
 if __name__ == "__main__":
-    print("表面检测相机程序启动(优化版v2)，端口10083，gf金手指模型，相机常驻模式")
+    print("表面检测相机程序启动(优化版v3)，端口10083，gf金手指模型，相机常驻模式")
     # 启动时预初始化相机 (可选, 加快首个请求)
     try:
         t_pre = threading.Thread(target=ensure_camera, daemon=True)

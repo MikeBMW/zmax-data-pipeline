@@ -1,12 +1,13 @@
 """
-Z-MAX 金手指检测 AOI 程序 · 优化版 v2 (10082)
+Z-MAX 金手指检测 AOI 程序 · 优化版 v3 (10082)
 ============================================
-基于原版优化，接口完全兼容 POST /capture_detect。
+纯异步方案: 拍照后立即返回 success, 检测后台并行, 结果只打印终端。
+动作调用零耽误, 推理不阻塞产线节奏。
 
 核心优化:
-  1. 【性能】相机常驻: 启动即打开, 请求只Grab, 秒级响应 (原版每次开关相机60-90s)
+  1. 【性能】相机常驻: 启动即打开, 请求只Grab, 秒级响应
   2. 【修复】增益设置失败(100100010): 自动探测相机增益范围, 容错降级不阻塞
-  3. 【关键】恢复检测结果返回: detect_count/detections 回传, 产线状态机可判定
+  3. 【异步】检测并行: 拍照完立即返回 success, 推理后台线程跑, 结果打印终端
   4. 【优化】设备枚举缓存: 只枚举一次, 后续直接打开
   5. 【健壮】异常自动重连相机 + 资源释放保证
 
@@ -288,6 +289,39 @@ def GrabAndSaveImage():
 
 global_img_count = 1
 
+# 【异步】后台检测线程: 拍照后立即返回, 检测并行跑, 结果打印终端
+_detect_lock = threading.Lock()
+_detect_count = 0          # 累计检测次数
+
+
+def _async_detect(topview_path, origin_path, detect_type):
+    """后台线程: 推理检测, 结果打印到终端"""
+    global _detect_count
+    try:
+        t0 = time.time()
+        result = detector.detect(topview_path, detect_type=detect_type)
+        dt_ms = (time.time() - t0) * 1000
+        dets = result.get("detections", [])
+        with _detect_lock:
+            _detect_count += 1
+            n = _detect_count
+        print("\n" + "=" * 60)
+        print(f"【检测结果 #{n}】{CAM_DESC} 推理耗时 {dt_ms:.0f}ms")
+        print(f"  原图:   {origin_path}")
+        print(f"  俯视图: {topview_path}")
+        print(f"  缺陷数: {len(dets)}  {'❌ NG' if dets else '✅ OK'}")
+        for i, d in enumerate(dets):
+            cls = d.get("class_name", d.get("name", "?"))
+            conf = d.get("confidence", d.get("conf", 0))
+            bbox = d.get("bbox", d.get("box", "?"))
+            print(f"    [{i+1}] {cls} conf={conf:.2f} bbox={bbox}")
+        if result.get("saved_incoming"):
+            print(f"  存档: {result['saved_incoming']}")
+        print("=" * 60 + "\n", flush=True)
+    except Exception as e:
+        print(f"【检测异常】{e}")
+        traceback.print_exc()
+
 
 @app.route("/capture_detect", methods=["POST"])
 def capture_detect_api():
@@ -301,13 +335,13 @@ def capture_detect_api():
 
         print(f"\n===== 检测通道 {channel_port} · {CAM_DESC} =====")
 
-        # 【优化1】相机常驻: 首次请求初始化, 后续直接抓帧 (秒级)
+        # 相机常驻: 首次请求初始化, 后续直接抓帧 (秒级)
         if not ensure_camera():
             return jsonify({"code": 500, "msg": "相机初始化失败"}), 500
 
+        # 拍照 (快, 相机常驻秒级)
         img_origin_path, img_topview_path = GrabAndSaveImage()
         if img_origin_path is None or img_topview_path is None:
-            # 【优化5】单次抓帧失败自动重连
             print("⚠️ 抓帧失败, 尝试重连相机...")
             Close_Device()
             if ensure_camera():
@@ -315,23 +349,15 @@ def capture_detect_api():
             if img_origin_path is None or img_topview_path is None:
                 return jsonify({"code": 500, "msg": "图像抓取失败"}), 500
 
-        # 调用加密检测器推理
-        result = detector.detect(img_topview_path, detect_type=detect_type)
+        print(f"   📸 已拍照, 启动后台检测 (不阻塞动作)")
 
-        # 【优化3】完整返回检测结果 (产线状态机判定用)
-        return jsonify({
-            "code": 200,
-            "msg": "success",
-            "camera_desc": CAM_DESC,
-            "sn": TARGET_SN,
-            "origin_image_path": img_origin_path,
-            "topview_image_path": img_topview_path,
-            "saved_incoming": result.get("saved_incoming"),
-            "saved_pre_detect": result.get("saved_pre_detect"),
-            "detect_count": result.get("detect_count", 0),
-            "detections": result.get("detections", []),
-            "elapsed_ms": 0
-        })
+        # 【异步】后台检测: 立即返回, 推理并行跑
+        t = threading.Thread(target=_async_detect,
+                             args=(img_topview_path, img_origin_path, detect_type), daemon=True)
+        t.start()
+
+        # 立即返回 success, 保证动作连贯执行
+        return jsonify({"code": 200, "msg": "success"})
     except Exception as e:
         print("==========接口异常完整堆栈==========")
         traceback.print_exc()
