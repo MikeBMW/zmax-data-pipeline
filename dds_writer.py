@@ -196,7 +196,7 @@ def push_snapshot(data):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true", help="单次快照")
-    ap.add_argument("--interval", type=float, default=1.0, help="刷写周期(秒)")
+    ap.add_argument("--interval", type=float, default=5.0, help="刷写周期(秒)")
     args = ap.parse_args()
 
     rclpy.init()
