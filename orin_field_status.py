@@ -18,7 +18,7 @@ import subprocess
 import time
 import urllib.request
 
-STATUS_URL = "http://datadrive.world/api/relay/orin/status"
+STATUS_URL = "http://datadrive.world/api/relay/upload"
 
 
 def ros_echo(topic, timeout=5):
@@ -127,11 +127,71 @@ def get_system():
             k, _, v = line.partition(":")
             mem[k] = int(v.strip().split()[0]) // 1024  # MB
     used = mem.get("MemTotal", 0) - mem.get("MemFree", 0) - mem.get("Buffers", 0) - mem.get("Cached", 0)
+    # CPU 使用率 (读 /proc/stat 两次间隔计算)
+    cpu_pct = 0.0
+    try:
+        def _cpu_times():
+            with open("/proc/stat") as f:
+                parts = f.readline().split()[1:]
+            idle = int(parts[3]) + int(parts[4])
+            total = sum(int(p) for p in parts)
+            return idle, total
+        i1, t1 = _cpu_times()
+        time.sleep(0.5)
+        i2, t2 = _cpu_times()
+        cpu_pct = round(100 * (1 - (i2 - i1) / max(t2 - t1, 1)), 1)
+    except Exception:
+        pass
+    # 温度
+    temp = None
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            temp = round(int(f.read().strip()) / 1000, 1)
+    except Exception:
+        pass
+    # 磁盘
+    disk = {}
+    try:
+        st = os.statvfs("/")
+        total = st.f_blocks * st.f_frsize / 1073741824
+        free = st.f_bavail * st.f_frsize / 1073741824
+        disk = {"total_gb": round(total, 1), "free_gb": round(free, 1),
+                "used_pct": round(100 * (1 - free / total), 1)}
+    except Exception:
+        pass
+    # GPU (Orin 自带 GPU, 无 nvidia-smi; 用 GPU 频率采样近似)
+    gpu = {}
+    try:
+        with open("/sys/class/devfreq/*/cur_freq") as f:
+            pass
+    except Exception:
+        pass
+    # 网络带宽 (读 /proc/net/dev 两次)
+    net = {}
+    try:
+        def _net_bytes():
+            with open("/proc/net/dev") as f:
+                lines = f.readlines()[2:]
+            rx = sum(int(l.split()[1]) for l in lines)
+            tx = sum(int(l.split()[9]) for l in lines)
+            return rx, tx
+        r1, t1 = _net_bytes()
+        time.sleep(0.5)
+        r2, t2 = _net_bytes()
+        net = {"rx_kbps": round((r2 - r1) / 1024 * 2, 1),
+               "tx_kbps": round((t2 - t1) / 1024 * 2, 1)}
+    except Exception:
+        pass
     return {
         "load_avg": [round(x, 2) for x in load],
+        "cpu_pct": cpu_pct,
+        "temp_c": temp,
         "mem_total_mb": mem.get("MemTotal", 0),
         "mem_used_mb": used,
         "mem_pct": round(used / mem.get("MemTotal", 1) * 100, 1),
+        "disk": disk,
+        "net": net,
+        "gpu": {"note": "Orin集成GPU, 无独立显存指标"},
     }
 
 
@@ -140,6 +200,7 @@ def main():
     while True:
         try:
             state = {
+                "meta": {"source": "orin_sys", "type": "system_status", "time": time.time()},
                 "online": True,
                 "ts": time.time(),
                 "time_str": time.strftime("%Y-%m-%d %H:%M:%S"),
