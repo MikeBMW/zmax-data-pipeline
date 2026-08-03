@@ -289,38 +289,65 @@ def GrabAndSaveImage():
 
 global_img_count = 1
 
-# 【异步】后台检测线程: 拍照后立即返回, 检测并行跑, 结果打印终端
+# 【异步】检测队列: 单worker串行处理, 模型只加载一次, API秒回
 _detect_lock = threading.Lock()
 _detect_count = 0          # 累计检测次数
+_detect_queue = []         # 待检测图像队列
+_detect_thread = None      # worker线程
 
 
-def _async_detect(topview_path, origin_path, detect_type):
-    """后台线程: 推理检测, 结果打印到终端"""
+def _detect_worker_loop():
+    """检测worker: 串行处理队列, 模型首次加载后复用"""
     global _detect_count
-    try:
-        t0 = time.time()
-        result = detector.detect(topview_path, detect_type=detect_type)
-        dt_ms = (time.time() - t0) * 1000
-        dets = result.get("detections", [])
+    while True:
+        item = None
         with _detect_lock:
-            _detect_count += 1
-            n = _detect_count
-        print("\n" + "=" * 60)
-        print(f"【检测结果 #{n}】{CAM_DESC} 推理耗时 {dt_ms:.0f}ms")
-        print(f"  原图:   {origin_path}")
-        print(f"  俯视图: {topview_path}")
-        print(f"  缺陷数: {len(dets)}  {'❌ NG' if dets else '✅ OK'}")
-        for i, d in enumerate(dets):
-            cls = d.get("class_name", d.get("name", "?"))
-            conf = d.get("confidence", d.get("conf", 0))
-            bbox = d.get("bbox", d.get("box", "?"))
-            print(f"    [{i+1}] {cls} conf={conf:.2f} bbox={bbox}")
-        if result.get("saved_incoming"):
-            print(f"  存档: {result['saved_incoming']}")
-        print("=" * 60 + "\n", flush=True)
-    except Exception as e:
-        print(f"【检测异常】{e}")
-        traceback.print_exc()
+            if _detect_queue:
+                item = _detect_queue.pop(0)
+        if item is None:
+            time.sleep(0.2)
+            continue
+        topview_path, origin_path, detect_type = item
+        try:
+            t0 = time.time()
+            result = detector.detect(topview_path, detect_type=detect_type)
+            dt_ms = (time.time() - t0) * 1000
+            dets = result.get("detections", [])
+            with _detect_lock:
+                _detect_count += 1
+                n = _detect_count
+            print("\n" + "=" * 60)
+            print(f"【检测结果 #{n}】{CAM_DESC} 推理耗时 {dt_ms:.0f}ms")
+            print(f"  原图:   {origin_path}")
+            print(f"  俯视图: {topview_path}")
+            print(f"  缺陷数: {len(dets)}  {'❌ NG' if dets else '✅ OK'}")
+            for i, d in enumerate(dets):
+                cls = d.get("class_name", d.get("name", "?"))
+                conf = d.get("confidence", d.get("conf", 0))
+                bbox = d.get("bbox", d.get("box", "?"))
+                print(f"    [{i+1}] {cls} conf={conf:.2f} bbox={bbox}")
+            if result.get("saved_incoming"):
+                print(f"  存档: {result['saved_incoming']}")
+            print("=" * 60 + "\n", flush=True)
+        except Exception as e:
+            print(f"【检测异常】{e}")
+            traceback.print_exc()
+
+
+def _ensure_detect_worker():
+    """确保worker线程启动"""
+    global _detect_thread
+    with _detect_lock:
+        if _detect_thread is None or not _detect_thread.is_alive():
+            _detect_thread = threading.Thread(target=_detect_worker_loop, daemon=True)
+            _detect_thread.start()
+
+
+def _enqueue_detect(topview_path, origin_path, detect_type):
+    """投递检测任务, 立即返回"""
+    with _detect_lock:
+        _detect_queue.append((topview_path, origin_path, detect_type))
+    _ensure_detect_worker()
 
 
 @app.route("/capture_detect", methods=["POST"])
@@ -349,12 +376,10 @@ def capture_detect_api():
             if img_origin_path is None or img_topview_path is None:
                 return jsonify({"code": 500, "msg": "图像抓取失败"}), 500
 
-        print(f"   📸 已拍照, 启动后台检测 (不阻塞动作)")
+        print(f"   📸 已拍照, 投递检测队列 (不阻塞动作)")
 
-        # 【异步】后台检测: 立即返回, 推理并行跑
-        t = threading.Thread(target=_async_detect,
-                             args=(img_topview_path, img_origin_path, detect_type), daemon=True)
-        t.start()
+        # 【异步】投递检测队列, 立即返回
+        _enqueue_detect(img_topview_path, img_origin_path, detect_type)
 
         # 立即返回 success, 保证动作连贯执行
         return jsonify({"code": 200, "msg": "success"})
@@ -374,13 +399,15 @@ def run_flask():
 
 
 if __name__ == "__main__":
-    print("金手指检测相机程序启动(优化版v2)，端口10082，gf金手指模型，相机常驻模式")
+    print("金手指检测相机程序启动(优化版v3)，端口10082，gf金手指模型，相机常驻模式")
     # 启动时预初始化相机 (可选, 加快首个请求)
     try:
         t_pre = threading.Thread(target=ensure_camera, daemon=True)
         t_pre.start()
     except Exception:
         pass
+    # 启动检测worker (模型首次加载在后台, 避免请求时访问GitHub)
+    _ensure_detect_worker()
     t = Thread(target=run_flask)
     t.start()
     t.join()
