@@ -112,15 +112,35 @@ def get_disk():
     return {"total_mb": round(total_mb / 1048576, 1), "count": len(dirs), "over_1g": total_mb > 1048576000, "oldest": oldest}
 
 # ─── 清理旧数据 ───
+MCAP_DIR = os.path.expanduser("~/.zmax/mcap")
+MAX_MCAP_MB = 10_000  # mcap 上限 10GB, 超了自动清理
+
 @app.post("/record/cleanup")
 def cleanup(n: int = 10):
-    dirs = sorted(glob.glob("/tmp/zmax_*"), key=os.path.getmtime)
-    if len(dirs) <= n: return {"deleted": 0, "remaining": len(dirs)}
+    """保留最近 n 轮, 删除更旧的 mcap; 返回释放空间"""
+    dirs = sorted(glob.glob(f"{MCAP_DIR}/record_*"), key=os.path.getmtime)
+    if len(dirs) <= n: return {"deleted": 0, "remaining": len(dirs), "total_mb": _mcap_mb()}
     deleted = 0; freed_mb = 0
     for d in dirs[:-n]:
         s = sum(os.path.getsize(f) for f in glob.glob(f"{d}/*") if os.path.isfile(f))
         freed_mb += s; shutil.rmtree(d, ignore_errors=True); deleted += 1
-    return {"deleted": deleted, "freed_mb": round(freed_mb / 1048576, 1), "remaining": n}
+    return {"deleted": deleted, "freed_mb": round(freed_mb / 1048576, 1), "remaining": n, "total_mb": _mcap_mb()}
+
+def _mcap_mb() -> float:
+    total = 0
+    for d in glob.glob(f"{MCAP_DIR}/record_*"):
+        for f in glob.glob(f"{d}/*"):
+            if os.path.isfile(f): total += os.path.getsize(f)
+    return round(total / 1048576, 1)
+
+@app.get("/disk/guard")
+def disk_guard():
+    """磁盘守护: mcap 超 10GB 自动清理到剩最近 20 轮 (采集前调用)"""
+    total_mb = _mcap_mb()
+    if total_mb > MAX_MCAP_MB:
+        r = cleanup(20)
+        return {"guard": "triggered", "before_mb": total_mb, "after_mb": _mcap_mb(), "cleaned": r}
+    return {"guard": "ok", "total_mb": total_mb, "limit_mb": MAX_MCAP_MB}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
