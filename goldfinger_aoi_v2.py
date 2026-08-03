@@ -31,6 +31,9 @@ from SciCamPayload_header import *
 from yolo_detector import YoloDetector
 
 app = Flask(__name__)
+m_Device = SciCamera()   # 相机设备全局实例 (原版保留)
+detector = YoloDetector()  # 加密检测器全局实例, 启动加载一次 (原版保留)
+_detector = None
 
 # 图片保存根目录
 SAVE_ROOT_DIR = r"./goldfinger_images"

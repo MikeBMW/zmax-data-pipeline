@@ -1,5 +1,5 @@
 """
-Z-MAX 表面检测 AOI 程序 · 优化版 v2 (10083)
+Z-MAX 金手指检测 AOI 程序 · 优化版 v2 (10082)
 ============================================
 基于原版优化，接口完全兼容 POST /capture_detect。
 
@@ -31,6 +31,9 @@ from SciCamPayload_header import *
 from yolo_detector import YoloDetector
 
 app = Flask(__name__)
+m_Device = SciCamera()   # 相机设备全局实例 (原版保留)
+detector = YoloDetector()  # 加密检测器全局实例, 启动加载一次 (原版保留)
+_detector = None
 
 # 图片保存根目录
 SAVE_ROOT_DIR = r"./surface_images"
@@ -345,7 +348,7 @@ def run_flask():
 
 
 if __name__ == "__main__":
-    print("金手指检测相机程序启动(优化版v2)，端口10083，housing表面模型，相机常驻模式")
+    print("表面检测相机程序启动(优化版v2)，端口10083，gf金手指模型，相机常驻模式")
     # 启动时预初始化相机 (可选, 加快首个请求)
     try:
         t_pre = threading.Thread(target=ensure_camera, daemon=True)
