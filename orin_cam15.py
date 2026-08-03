@@ -24,7 +24,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-FPS = 15
+FPS = 8
 WIDTH, HEIGHT = 424, 240
 
 # 心跳检测 (ECS 快照实时度)
