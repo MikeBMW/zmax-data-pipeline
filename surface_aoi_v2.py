@@ -289,12 +289,33 @@ def GrabAndSaveImage():
 global_img_count = 1
 
 
-# 【优化6】4步流水线: 前3步拍照检测并行+立即放行, 第4步汇总NG/OK
-PIPELINE_STEPS = 4            # 总步数 (AOI_3/4/5/6 调10083 共4次)
+# 【优化6】4步流水线自动策略: 间隔感知分组
+# 规则: 连续短间隔(<60s)调用视为同一轮; 长间隔(>=60s)=新一轮开始(自动重置)
+# 表面检测(AOI_3/4/5/6)在金手指检测之后, 两轮之间间隔很长 → 天然分组
+PIPELINE_STEPS = 4            # 每轮调用步数
+SHORT_INTERVAL = 60.0         # 同轮判定阈值(秒): 小于=同一轮, 大于=新轮
 _pipeline_lock = threading.Lock()
-_pipeline_seq = 0             # 当前第几步 (1-4)
+_pipeline_seq = 0             # 当前轮第几步 (1-4)
+_pipeline_last_ts = 0.0       # 上次调用时间戳
 _pipeline_results = []        # 已完成的检测结果 [{step, detect_count, detections, ng}]
 _pipeline_threads = []        # 后台检测线程
+
+
+def _pipeline_advance():
+    """间隔感知步进: 返回 (step, is_new_round)"""
+    global _pipeline_seq, _pipeline_last_ts
+    now = time.time()
+    with _pipeline_lock:
+        is_new = (now - _pipeline_last_ts) > SHORT_INTERVAL or _pipeline_seq >= PIPELINE_STEPS
+        if is_new:
+            # 新一轮: 重置计数 + 清空上一轮残留
+            _pipeline_seq = 0
+            _pipeline_results.clear()
+            _pipeline_threads.clear()
+        _pipeline_seq += 1
+        step = _pipeline_seq
+        _pipeline_last_ts = now
+    return step, is_new
 
 
 def _detect_worker(topview_path, detect_type, step):
@@ -316,6 +337,21 @@ def _detect_worker(topview_path, detect_type, step):
         with _pipeline_lock:
             _pipeline_results.append({"step": step, "detect_count": 0,
                                       "detections": [], "ng": True, "error": str(e)})
+
+
+def _pipeline_collect():
+    """收集并清空当前轮结果"""
+    global _pipeline_seq
+    with _pipeline_lock:
+        threads = list(_pipeline_threads)
+    for th in threads:
+        th.join(timeout=60)
+    with _pipeline_lock:
+        results = sorted(_pipeline_results, key=lambda x: x.get("step", 0))
+        _pipeline_results.clear()
+        _pipeline_threads.clear()
+        _pipeline_seq = 0
+    return results
 
 
 @app.route("/capture_detect", methods=["POST"])
@@ -346,9 +382,10 @@ def capture_detect_api():
                 return jsonify({"code": 500, "msg": "图像抓取失败"}), 500
 
         with _pipeline_lock:
-            _pipeline_seq += 1
-            step = _pipeline_seq
+            step, is_new = _pipeline_advance()
 
+        if is_new:
+            print(f"   ┌─ [新一轮] 检测轮开始 (step1/{PIPELINE_STEPS})")
         print(f"   ┌─ [step{step}/{PIPELINE_STEPS}] 已拍照, 启动检测...")
 
         # 启动后台检测线程 (拍照已同步完成, 检测异步跑)
@@ -373,16 +410,8 @@ def capture_detect_api():
             })
         else:
             # 第4步: 等待所有后台检测完成, 汇总最终结果
-            print(f"   └─ [step{step}] 最终步: 等待全部检测完成...")
-            with _pipeline_lock:
-                threads = list(_pipeline_threads)
-            for th in threads:
-                th.join(timeout=60)
-            with _pipeline_lock:
-                results = sorted(_pipeline_results, key=lambda x: x.get("step", 0))
-                _pipeline_seq = 0
-                _pipeline_results = []
-                _pipeline_threads = []
+            print(f"   └─ [step{step}] 本轮最后一步: 等待全部检测完成...")
+            results = _pipeline_collect()
 
             # 汇总: 任一步有缺陷 → NG
             all_ng = [r for r in results if r.get("ng")]
