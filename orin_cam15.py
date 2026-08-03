@@ -40,7 +40,17 @@ _node = None
 
 
 def check_heartbeat() -> bool:
-    """控制台心跳: cam/status age_s 小 = 控制台在看"""
+    """心跳: 控制台在看(cam/status age小) 或 快照服务在跑(本地进程)
+    快照服务是心跳源, 它需要相机帧持续上传, 所以它在=相机开"""
+    # 信号1: 快照服务本地进程在跑 (它是心跳源, 必须供帧)
+    import subprocess
+    try:
+        r = subprocess.run(["pgrep", "-f", "orin_snapshot"], capture_output=True, timeout=3)
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass
+    # 信号2: 控制台在看 (cam/status age_s 小)
     try:
         with urllib.request.urlopen(CAM_STATUS_URL, timeout=5) as r:
             d = json.loads(r.read())
