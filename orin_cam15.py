@@ -18,7 +18,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-FPS = 30
+FPS = 15
 WIDTH, HEIGHT = 424, 240
 
 

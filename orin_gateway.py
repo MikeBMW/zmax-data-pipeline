@@ -113,7 +113,7 @@ def get_disk():
 
 # ─── 清理旧数据 ───
 MCAP_DIR = os.path.expanduser("~/.zmax/mcap")
-MAX_MCAP_MB = 10_000  # mcap 上限 10GB, 超了自动清理
+MAX_MCAP_MB = 1_000  # mcap 上限 1GB, 超了自动清理
 
 @app.post("/record/cleanup")
 def cleanup(n: int = 10):
@@ -135,11 +135,13 @@ def _mcap_mb() -> float:
 
 @app.get("/disk/guard")
 def disk_guard():
-    """磁盘守护: mcap 超 10GB 自动清理到剩最近 20 轮 (采集前调用)"""
+    """磁盘守护: mcap 超上限自动清理 (1GB上限保留10轮, 更多旧轮直接删)"""
     total_mb = _mcap_mb()
     if total_mb > MAX_MCAP_MB:
-        r = cleanup(20)
-        return {"guard": "triggered", "before_mb": total_mb, "after_mb": _mcap_mb(), "cleaned": r}
+        # 上限1GB: 保留10轮(约1GB), 其余全删
+        keep = 10
+        r = cleanup(keep)
+        return {"guard": "triggered", "before_mb": total_mb, "after_mb": _mcap_mb(), "limit_mb": MAX_MCAP_MB, "keep_rounds": keep, "cleaned": r}
     return {"guard": "ok", "total_mb": total_mb, "limit_mb": MAX_MCAP_MB}
 
 if __name__ == "__main__":
