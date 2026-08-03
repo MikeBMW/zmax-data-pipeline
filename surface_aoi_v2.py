@@ -193,36 +193,23 @@ def ensure_camera():
         return True
 
 
-def warp_goldfinger_topview(pDstData, img_w, img_h, out_w=None, out_h=None):
-    """金手指透视校正 (保持不变)"""
-    if out_w is None:
-        out_w = img_w
-    if out_h is None:
-        out_h = img_h
-    img_mat = np.frombuffer(pDstData, dtype=np.uint8).reshape(img_h, img_w, 3)
-    src_points = np.array([
-        [400, 1000], [2000, 1000], [2000, 1250], [400, 1250]
-    ], dtype=np.float32)
-    dst_points = np.array([
-        [0, 0], [out_w, 0], [out_w, out_h], [0, out_h]
-    ], dtype=np.float32)
-    trans_matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-    return cv2.warpPerspective(img_mat, trans_matrix, (out_w, out_h))
+# 【已删除】warp_goldfinger_topview: 表面检测不需要透视校正, 直接用原图
 
 
 def GrabAndSaveImage():
+    """表面检测: 只保存原图, 不需要topview校正 (检测直接用原图)"""
     global global_img_count
     ppayload = ctypes.c_void_p()
     reVal = m_Device.SciCam_Grab(ppayload)
     if reVal != SCI_CAMERA_OK:
         print('Grab抓取帧失败，错误码：%d' % reVal)
-        return None, None
+        return None
     payloadAttribute = SCI_CAM_PAYLOAD_ATTRIBUTE()
     reVal = SciCam_Payload_GetAttribute(ppayload, payloadAttribute)
     if reVal != SCI_CAMERA_OK:
         print('Get payload attribute failed: %d' % reVal)
         m_Device.SciCam_FreePayload(ppayload)
-        return None, None
+        return None
     imgIsComplete = bool(payloadAttribute.isComplete)
     payloadMode = payloadAttribute.payloadMode
     imgPixelType = payloadAttribute.imgAttr.pixelType
@@ -231,23 +218,21 @@ def GrabAndSaveImage():
 
     if not os.path.exists(SAVE_ROOT_DIR):
         os.makedirs(SAVE_ROOT_DIR, exist_ok=True)
-    origin_name = "Finger_Image_W{}_H{}_No_{}.png".format(imgWidth, imgHeight, global_img_count)
-    topview_name = "Finger_TopView_W1600_H220_No_{}.png".format(global_img_count)
+    origin_name = "Surface_Image_W{}_H{}_No_{}.png".format(imgWidth, imgHeight, global_img_count)
     save_file_param = os.path.join(SAVE_ROOT_DIR, origin_name)
-    topview_file_param = os.path.join(SAVE_ROOT_DIR, topview_name)
     global_img_count += 1
 
     if not imgIsComplete or payloadMode != SciCamPayloadMode.SciCam_PayloadMode_2D:
         print("Image data is not complete or payload type error,")
         m_Device.SciCam_FreePayload(ppayload)
-        return None, None
+        return None
 
     imgData = ctypes.c_void_p()
     reVal = SciCam_Payload_GetImage(ppayload, imgData)
     if reVal != SCI_CAMERA_OK:
         print('Get image data failed: %d' % reVal)
         m_Device.SciCam_FreePayload(ppayload)
-        return None, None
+        return None
 
     dstImgSize = ctypes.c_int()
     mono_types = [
@@ -258,17 +243,16 @@ def GrabAndSaveImage():
         SciCamPixelType.Mono14, SciCamPixelType.Mono16,
         SciCamPixelType.Mono10Packed, SciCamPixelType.Mono12Packed, SciCamPixelType.Mono14p
     ]
+    saved = False
     if imgPixelType in mono_types:
         reVal = SciCam_Payload_ConvertImage(payloadAttribute.imgAttr, imgData, SciCamPixelType.Mono8, None, dstImgSize, True)
         if reVal == SCI_CAMERA_OK:
             pDstData = (ctypes.c_ubyte * dstImgSize.value)()
             reVal = SciCam_Payload_ConvertImage(payloadAttribute.imgAttr, imgData, SciCamPixelType.Mono8, pDstData, dstImgSize, True)
             if reVal == SCI_CAMERA_OK:
-                top_img = warp_goldfinger_topview(pDstData, imgWidth, imgHeight)
-                cv2.imwrite(topview_file_param, top_img)
-                print(f"【俯视校正图保存成功】{topview_file_param}")
                 reVal = SciCam_Payload_SaveImage(save_file_param, SciCamPixelType.Mono8, pDstData, imgWidth, imgHeight)
                 if reVal == SCI_CAMERA_OK:
+                    saved = True
                     print('原图保存成功.', save_file_param)
     else:
         reVal = SciCam_Payload_ConvertImage(payloadAttribute.imgAttr, imgData, SciCamPixelType.RGB8, None, dstImgSize, True)
@@ -276,15 +260,13 @@ def GrabAndSaveImage():
             pDstData = (ctypes.c_ubyte * dstImgSize.value)()
             reVal = SciCam_Payload_ConvertImage(payloadAttribute.imgAttr, imgData, SciCamPixelType.RGB8, pDstData, dstImgSize, True)
             if reVal == SCI_CAMERA_OK:
-                top_img = warp_goldfinger_topview(pDstData, imgWidth, imgHeight)
-                cv2.imwrite(topview_file_param, top_img)
-                print(f"【俯视校正图保存成功】{topview_file_param}")
                 reVal = SciCam_Payload_SaveImage(save_file_param, SciCamPixelType.RGB8, pDstData, imgWidth, imgHeight)
                 if reVal == SCI_CAMERA_OK:
+                    saved = True
                     print('原图保存成功.', save_file_param)
 
     m_Device.SciCam_FreePayload(ppayload)
-    return save_file_param, topview_file_param
+    return save_file_param if saved else None
 
 
 global_img_count = 1
@@ -294,12 +276,12 @@ _detect_lock = threading.Lock()
 _detect_count = 0          # 累计检测次数
 
 
-def _async_detect(topview_path, origin_path, detect_type):
-    """后台线程: 推理检测, 结果打印到终端"""
+def _async_detect(img_path, detect_type):
+    """后台线程: 推理检测(原图), 结果打印到终端"""
     global _detect_count
     try:
         t0 = time.time()
-        result = detector.detect(topview_path, detect_type=detect_type)
+        result = detector.detect(img_path, detect_type=detect_type)
         dt_ms = (time.time() - t0) * 1000
         dets = result.get("detections", [])
         with _detect_lock:
@@ -307,8 +289,7 @@ def _async_detect(topview_path, origin_path, detect_type):
             n = _detect_count
         print("\n" + "=" * 60)
         print(f"【检测结果 #{n}】{CAM_DESC} 推理耗时 {dt_ms:.0f}ms")
-        print(f"  原图:   {origin_path}")
-        print(f"  俯视图: {topview_path}")
+        print(f"  图像: {img_path}")
         print(f"  缺陷数: {len(dets)}  {'❌ NG' if dets else '✅ OK'}")
         for i, d in enumerate(dets):
             cls = d.get("class_name", d.get("name", "?"))
@@ -339,21 +320,21 @@ def capture_detect_api():
         if not ensure_camera():
             return jsonify({"code": 500, "msg": "相机初始化失败"}), 500
 
-        # 拍照 (快, 相机常驻秒级)
-        img_origin_path, img_topview_path = GrabAndSaveImage()
-        if img_origin_path is None or img_topview_path is None:
+        # 拍照 (快, 相机常驻秒级, 只存原图)
+        img_path = GrabAndSaveImage()
+        if img_path is None:
             print("⚠️ 抓帧失败, 尝试重连相机...")
             Close_Device()
             if ensure_camera():
-                img_origin_path, img_topview_path = GrabAndSaveImage()
-            if img_origin_path is None or img_topview_path is None:
+                img_path = GrabAndSaveImage()
+            if img_path is None:
                 return jsonify({"code": 500, "msg": "图像抓取失败"}), 500
 
         print(f"   📸 已拍照, 启动后台检测 (不阻塞动作)")
 
         # 【异步】后台检测: 立即返回, 推理并行跑
         t = threading.Thread(target=_async_detect,
-                             args=(img_topview_path, img_origin_path, detect_type), daemon=True)
+                             args=(img_path, detect_type), daemon=True)
         t.start()
 
         # 立即返回 success, 保证动作连贯执行
