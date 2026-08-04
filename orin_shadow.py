@@ -54,6 +54,12 @@ _shadow_samples = []        # 影子对比样本
 _report_count = 0
 _lock = threading.Lock()
 
+# 静态帧过滤: 关节变化超过阈值才算"有动作", 静止帧不记录
+JOINT_EPS = 0.01            # 关节变化阈值 (rad)
+_last_sample_joints = None  # 上次记录的关节状态
+_last_sample_ts = 0.0
+MIN_INTERVAL = 0.5          # 最小采样间隔 (秒)
+
 
 class ShadowNode(Node):
     """订阅真机关节状态 + 相机图像"""
@@ -138,12 +144,30 @@ def build_image_tensor():
 
 
 def run_shadow_once(act, state_dim, act_dim):
-    """影子推理一次: 真机状态+图像 → 预测动作"""
-    global _shadow_samples
+    """影子推理一次: 真机状态+图像 → 预测动作 (静态帧过滤)"""
+    global _shadow_samples, _last_sample_joints, _last_sample_ts
     state = build_state_vector(state_dim)
     img_t = build_image_tensor()
     if state is None or img_t is None:
         return None
+
+    # 【静态帧过滤】只记录有动作的帧 (关节变化>阈值 或 超过最小间隔)
+    now = time.time()
+    if _last_sample_joints is not None:
+        diff = max(abs(a - b) for a, b in zip(state, _last_sample_joints))
+        changed = diff > JOINT_EPS
+    else:
+        changed = True  # 首个样本
+    time_ok = (now - _last_sample_ts) >= MIN_INTERVAL
+    if not changed and not time_ok:
+        return None  # 静止且未到间隔 → 过滤
+    if not changed and time_ok:
+        _last_sample_joints = state.copy()
+        _last_sample_ts = now
+        return None  # 静止(定时采样仅刷新基准, 不记录)
+    _last_sample_joints = state.copy()
+    _last_sample_ts = now
+
     t0 = time.time()
     with torch.no_grad():
         state_t = torch.from_numpy(state).unsqueeze(0).to(DEV)
