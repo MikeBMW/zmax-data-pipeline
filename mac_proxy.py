@@ -1,45 +1,63 @@
 #!/usr/bin/env python3
-"""Mac 用户级 HTTP/HTTPS 转发代理 (免sudo)
+"""Mac 用户级 HTTP/HTTPS 转发代理 (免sudo) · 防连接轰炸版
 工控机设置代理 http://192.168.23.1:9100 即可上网
+
+v2 改进:
+  - 连接数上限 (防工控机疯狂建连耗尽线程)
+  - 空闲超时 (防连接挂死)
+  - 全局连接计数 + 拒绝策略
 """
 import http.server
 import socket
 import ssl
 import threading
+import time
 import urllib.parse
+
+# 防轰炸配置
+MAX_CONNECTIONS = 60        # 最大并发连接 (超过拒绝)
+IDLE_TIMEOUT = 30           # 空闲超时秒数 (超时断开)
+_conn_count = 0
+_conn_lock = threading.Lock()
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def do_GET(self):
-        self._forward()
+    def _enter(self) -> bool:
+        """尝试占用连接名额, 满了返回 False"""
+        global _conn_count
+        with _conn_lock:
+            if _conn_count >= MAX_CONNECTIONS:
+                return False
+            _conn_count += 1
+            return True
 
-    def do_POST(self):
-        self._forward()
+    def _exit(self):
+        global _conn_count
+        with _conn_lock:
+            if _conn_count > 0:
+                _conn_count -= 1
 
-    def do_PUT(self):
-        self._forward()
+    def setup(self):
+        # 连接进入前检查名额
+        if not self._enter():
+            try:
+                self.connection.close()
+            except Exception:
+                pass
+            raise ConnectionError("too many connections")
+        super().setup()
+        # 空闲超时
+        self.connection.settimeout(IDLE_TIMEOUT)
 
-    def do_DELETE(self):
-        self._forward()
-
-    def do_CONNECT(self):
-        # HTTPS CONNECT 隧道
-        host, _, port = self.path.partition(":")
-        port = int(port or 443)
+    def finish(self):
         try:
-            remote = socket.create_connection((host, port), timeout=15)
-            self.send_response(200, "Connection Established")
-            self.end_headers()
-            # 双向转发
-            t1 = threading.Thread(target=self._pipe, args=(self.connection, remote), daemon=True)
-            t2 = threading.Thread(target=self._pipe, args=(remote, self.connection), daemon=True)
-            t1.start()
-            t2.start()
-            t1.join()
-        except Exception as e:
-            self.send_error(502, f"CONNECT failed: {e}")
+            super().finish()
+        except Exception:
+            pass
+        finally:
+            self._exit()
 
     def _pipe(self, src, dst):
         try:
@@ -56,6 +74,38 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def do_CONNECT(self):
+        # HTTPS CONNECT 隧道
+        host, _, port = self.path.partition(":")
+        port = int(port or 443)
+        try:
+            remote = socket.create_connection((host, port), timeout=15)
+            self.send_response(200, "Connection Established")
+            self.end_headers()
+            t1 = threading.Thread(target=self._pipe, args=(self.connection, remote), daemon=True)
+            t2 = threading.Thread(target=self._pipe, args=(remote, self.connection), daemon=True)
+            t1.start()
+            t2.start()
+            t1.join(timeout=IDLE_TIMEOUT)
+            t2.join(timeout=IDLE_TIMEOUT)
+        except Exception as e:
+            try:
+                self.send_error(502, f"CONNECT failed: {e}")
+            except Exception:
+                pass
+
+    def do_GET(self):
+        self._forward()
+
+    def do_POST(self):
+        self._forward()
+
+    def do_PUT(self):
+        self._forward()
+
+    def do_DELETE(self):
+        self._forward()
+
     def _forward(self):
         try:
             url = urllib.parse.urlsplit(self.path)
@@ -70,7 +120,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 ctx = ssl.create_default_context()
                 remote = ctx.wrap_socket(remote, server_hostname=host)
 
-            # 转发请求
             body = None
             if self.headers.get("Content-Length"):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
@@ -83,28 +132,27 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if body:
                 remote.sendall(body)
 
-            # 读响应
             resp = b""
             while True:
                 chunk = remote.recv(65536)
                 if not chunk:
                     break
                 resp += chunk
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
+                if len(resp) > 10_000_000:  # 10MB 上限
+                    break
             self.wfile.write(resp)
             remote.close()
-        except Exception as e:
+        except Exception:
             try:
-                self.send_error(502, f"forward failed: {e}")
+                self.send_error(502, "proxy error")
             except Exception:
                 pass
 
-    def log_message(self, *args):
-        pass
+    def log_message(self, fmt, *args):
+        pass  # 静默日志
 
 
 if __name__ == "__main__":
-    print("🌐 Mac 转发代理 @ http://192.168.23.1:9100 (工控机设此代理即可上网)")
-    http.server.ThreadingHTTPServer(("0.0.0.0", 9100), ProxyHandler).serve_forever()
+    print("Mac 代理 v2 (防轰炸) @ :9100, 最大连接 60", flush=True)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 9100), ProxyHandler)
+    server.serve_forever()
