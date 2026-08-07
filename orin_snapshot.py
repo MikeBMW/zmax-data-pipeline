@@ -24,6 +24,7 @@ from std_msgs.msg import String
 
 SNAP_URL = "http://datadrive.world/api/relay/upload"
 INTERVAL = 0.25       # 4fps (相机已提速到16fps, 快照抓4fps足够流畅)
+IDLE_TIMEOUT = 8.0    # 状态超时秒数: 超过则判定待机(显示IDLE)
 JPEG_QUALITY = 55     # 清晰度
 IMG_SCALE = 0.75      # 424x240 → 318x180 (适中)
 
@@ -37,6 +38,8 @@ class SnapshotNode(Node):
         self.last_transition = None    # 最近一次转移
         self.last_transition_ts = 0
         self.current_state = None      # 当前状态 (从transition.to提取)
+        self.motion_states = []        # active_states 累积数组
+        self.states_ts = None          # 状态最后更新时间
         self.infer_count = 0
 
         self.sub = self.create_subscription(Image, "/realsense/color/image_raw", self.on_img, 10)
@@ -51,6 +54,7 @@ class SnapshotNode(Node):
         try:
             d = json.loads(msg.data)
             self.motion_states = d.get("states", [])
+            self.states_ts = time.time()   # 记录状态更新时间
         except Exception:
             pass
 
@@ -66,12 +70,17 @@ class SnapshotNode(Node):
             pass
 
     def current_action(self):
-        """提取当前动作名 (状态机路径最后一段, 取最新激活)"""
-        if self.motion_states:
-            # states 数组是累积的, 最后一个是当前状态
-            s = self.motion_states[-1]
-            return s.split("::")[-1] if "::" in s else s.split("/")[-1]
-        return "IDLE"
+        """提取当前动作名 (状态机路径最后一段, 取最新激活)
+        超时判定: states 超过 IDLE_TIMEOUT 未更新 = 机器人待机 → IDLE"""
+        if not self.motion_states:
+            return "IDLE"
+        # 状态长时间未更新 → 待机
+        if hasattr(self, "states_ts") and self.states_ts:
+            age = time.time() - self.states_ts
+            if age > IDLE_TIMEOUT:
+                return "IDLE"
+        s = self.motion_states[-1]
+        return s.split("::")[-1] if "::" in s else s.split("/")[-1]
 
     def all_state_names(self):
         """全量状态名列表 (去重)"""
@@ -121,7 +130,7 @@ def upload_snapshot(jpeg_bytes, action, ts, node):
         "snapshot_b64": base64.b64encode(jpeg_bytes).decode(),
         "timestamp": ts,
         "action": action,
-        "current_state": node.current_state,          # 当前状态 (高亮)
+        "current_state": node.current_action(),       # 当前状态 (states[-1], 高亮)
         "all_states": node.all_state_names(),         # 全量状态 (弱化)
     }
     data = json.dumps(pkg).encode()
