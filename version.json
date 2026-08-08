@@ -1,16 +1,22 @@
 {
   "project": "Z-MAX Data Pipeline",
-  "version": "v2.6.1",
-  "date": "2026-08-03",
+  "version": "v2.7.0",
+  "date": "2026-08-08",
   "maintainer": "小芳 (Hermes)",
   "status": "running",
-  "release_note": "小版本迭代: DDS聚合器(水流式刷写+QoS修复) + 性能优化(刷写周期5s) + 清理模拟器/残留进程 + 主数据空间设计文档",
+  "release_note": "中版本迭代: 7x24自动运维(ops_healthcheck自愈) + 影子模式sim-to-real + 磁盘守护1GB + 端侧实现方案 + 快照状态修复(IDLE超时) + 代理防轰炸",
   "changes": [
-    "feat: dds_writer.py 全局数据空间聚合器 (12话题/6节点/27技能)",
-    "fix: QoS BEST_EFFORT 适配产线话题",
-    "perf: DDS刷写周期 1s→5s 省CPU",
-    "clean: 停 simulink_hw_server 模拟器 (产线真实运行, 省71% CPU)",
-    "clean: 清理多残留 dds_writer 进程",
-    "docs: DDS-MASTER-DATA.md 主数据6类定义 + 数据分层L1-L4"
+    "feat: ops_healthcheck.py 7x24自动运维(ECS端点+Orin服务+资源+快照自愈)",
+    "feat: orin_shadow.py 影子模式(真机状态+图像→ACT推理→对比→回传)",
+    "feat: 磁盘守护 /disk/guard mcap≤1GB(保留10轮)",
+    "feat: 快照状态修复 current_action(states[-1]+8s超时IDLE)",
+    "feat: mac_proxy v2 防连接轰炸(60连接上限+30s空闲)",
+    "docs: 端侧实现方案v1.1(对齐simulink第5节)",
+    "cron: zmax-auto-ops(10min) + zmax-auto-collect(10min) + orin-online-watch(3min)"
+  ],
+  "cron_services": [
+    "zmax-auto-ops: 链路健康检查+服务自愈 (10min)",
+    "zmax-auto-collect: 磁盘守护+采集+打标+上传 (10min)",
+    "orin-online-watch: Orin在线监控 (3min)"
   ]
 }
