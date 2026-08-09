@@ -1,19 +1,15 @@
 {
   "project": "Z-MAX Data Pipeline",
-  "version": "v3.0.0",
+  "version": "v3.0.1",
   "date": "2026-08-09",
   "maintainer": "小芳 (Hermes)",
   "status": "running",
-  "release_note": "大版本升级: 统一Docker容器(zmax-std) + 三色灯修复(Orin地址) + 模型容器化部署到Mac + 7x24自动运维 + Mac推理验证",
+  "release_note": "小版本: 原子场景JSON(插拔/搬运/光学检测三场景,工艺指标+结构尺寸) + 收工清理",
   "changes": [
-    "feat: 统一Docker环境文档(zmax-train:v7标准, 三端对齐)",
-    "feat: 容器三端兼容方案(Orin须JetPack CUDA torch)",
-    "feat: Mac模型推理验证(mac_infer_check.py, metaworld 39D→4D跑通)",
-    "fix: 硬件工具箱Orin地址 nvidia@192.168.23.10→tashan@192.168.23.66(三色灯/夹爪/相机恢复)",
-    "feat: 7x24自动运维(ops_healthcheck自愈)",
-    "docs: 端侧实现方案v1.1(14节点/IO/数据质量)"
+    "feat: SCENES-ATOMIC.json 原子场景库(SCN_PLUG/SCN_TRANSFER/SCN_AOI, 成功率≥99%+节拍+结构尺寸)",
+    "chore: mcap清理739M(保留10轮)"
   ],
-  "version_sync": "产品v2.0.0 = 管线v3.0.0 (大版本一致)",
+  "version_sync": "产品v2.0.0 = 管线v3.0.x (大版本一致)",
   "cron_services": [
     "zmax-auto-ops: 链路健康检查+服务自愈 (10min)",
     "zmax-auto-collect: 磁盘守护+采集+打标+上传 (10min)",
