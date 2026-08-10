@@ -1,0 +1,106 @@
+{
+  "schema": "Z-MAX 精细操作场景需求 v1.0",
+  "date": "2026-08-10",
+  "engineer": "小芳 (工艺工程师) + 静静 (策略设计)",
+  "policy": "LeftRightPolicy (左脑动作+右脑世界模型+8状态机调制)",
+  "input_39d": {
+    "desc": "39D 观测向量 (真机状态)",
+    "structure": [
+      {"idx": "0-5", "field": "机械臂6关节角 (rad)", "source": "/robot/joint_states", "unit": "rad"},
+      {"idx": "6-8", "field": "末端位置 xyz (m)", "source": "/robot/tcp_pose", "unit": "m"},
+      {"idx": "9-11", "field": "末端姿态 rpy (rad)", "source": "/robot/tcp_pose", "unit": "rad"},
+      {"idx": "12-14", "field": "末端线速度 vx vy vz (m/s)", "source": "微分", "unit": "m/s"},
+      {"idx": "15-17", "field": "末端力 fx fy fz (N)", "source": "/robot/force_torque", "unit": "N"},
+      {"idx": "18-20", "field": "末端力矩 tx ty tz (Nm)", "source": "/robot/force_torque", "unit": "Nm"},
+      {"idx": "21-23", "field": "夹爪状态 位置/速度/力", "source": "/gripper_driver", "unit": "mm/mm/s/N"},
+      {"idx": "24-26", "field": "目标插槽位置 xyz (m)", "source": "视觉", "unit": "m"},
+      {"idx": "27-29", "field": "目标插槽姿态 rpy (rad)", "source": "视觉", "unit": "rad"},
+      {"idx": "30-32", "field": "光模块位姿 xyz (m)", "source": "视觉", "unit": "m"},
+      {"idx": "33-35", "field": "光模块姿态 rpy (rad)", "source": "视觉", "unit": "rad"},
+      {"idx": "36-38", "field": "接触状态 力/距离/进度", "source": "力觉+状态机", "unit": "N/m/-"}
+    ]
+  },
+
+  "scenarios": [
+    {
+      "id": "SCN_PLUG_400G",
+      "name": "光模块400G金手指插拔",
+      "process": "料盘取料 → 视觉对位 → 插入插槽 → 接触检测 → AOI检测 → 拔出",
+      "robot": "珞石 XMS5-R800 (6轴, 负载5kg, 重复精度±0.02mm)",
+      "equipment": "治具插槽 25mm间距 / 相机OPT-CC1-GG50 / 力觉传感器",
+      "states_8": ["接近", "对位", "下降", "抓取", "抬起", "转移", "插入", "完成"],
+      "action_metrics": [
+        {"state": "接近", "action_mod": "动作×0.3 + 规则偏置×2", "metric": {"approach_speed": "≤0.3 m/s", "approach_acc": "≤1.5 m/s²", "overshoot": "≤2mm", "success": "≥99.9%"}},
+        {"state": "对位", "action_mod": "视觉引导对准", "metric": {"align_accuracy": "±0.05mm", "align_time": "≤1.5s", "success": "≥99.5%"}},
+        {"state": "下降", "action_mod": "Z向减速下降", "metric": {"descent_speed": "≤0.05 m/s", "contact_force_trigger": "≤2N", "success": "≥99%"}},
+        {"state": "抓取", "action_mod": "动作×0.1 + 夹持0.6 + 锁定", "metric": {"grip_force": "5-12N", "grip_time": "≤0.5s", "slippage": "0mm", "success": "≥99.9%"}},
+        {"state": "抬起", "action_mod": "固定抬升 [0,0,0.8]", "metric": {"lift_height": "0.8m ±5mm", "lift_speed": "≤0.2 m/s", "stability": "抖动≤1mm", "success": "≥99.9%"}},
+        {"state": "转移", "action_mod": "速度自适应 0.6/0.35/0.15", "metric": {"transfer_speed": "≤1.2 m/s", "decel_near_target": "≤0.15 m/s", "overshoot": "≤3mm", "success": "≥99.5%"}},
+        {"state": "插入", "action_mod": "只下降 clip((孔z-销z)×2, ±0.6)", "metric": {"insert_force": "≤15N", "insert_depth": "8.0±0.1mm", "insert_retry": "≤2次", "success": "≥99%"}},
+        {"state": "完成", "action_mod": "状态机DONE", "metric": {"cycle_time": "≤15s", "final_check": "AOI 6视角 OK", "success": "≥99%"}}
+      ],
+      "overall_kpi": {
+        "operation_success_rate": "≥99%",
+        "cycle_time": "≤15s/件",
+        "throughput": "≥240件/小时",
+        "defect_leak": "≤0.5% (AOI漏杀)",
+        "downtime": "≤2%/天"
+      }
+    },
+    {
+      "id": "SCN_TRANSFER",
+      "name": "料盘搬运",
+      "process": "料盘识别 → 抓取 → 扫码 → 转移 → 放置",
+      "robot": "珞石 XMS5-R800",
+      "equipment": "料盘32槽(4×8) / 扫码枪 / 治具工位",
+      "states_8": ["接近", "对位", "下降", "抓取", "抬起", "转移", "放置", "完成"],
+      "action_metrics": [
+        {"state": "接近", "action_mod": "动作×0.3", "metric": {"approach_speed": "≤0.4 m/s", "success": "≥99.9%"}},
+        {"state": "对位", "action_mod": "视觉引导", "metric": {"align_accuracy": "±0.3mm", "success": "≥99.5%"}},
+        {"state": "抓取", "action_mod": "夹持锁定", "metric": {"grip_force": "5-12N", "slippage": "0mm", "success": "≥99.9%"}},
+        {"state": "抬起", "action_mod": "固定抬升", "metric": {"lift_height": "0.5m ±5mm", "success": "≥99.9%"}},
+        {"state": "转移", "action_mod": "速度自适应", "metric": {"transfer_speed": "≤1.2 m/s", "decel": "≤0.15 m/s近目标", "success": "≥99.5%"}},
+        {"state": "放置", "action_mod": "位置归零放置", "metric": {"place_accuracy": "±0.2mm", "place_force": "≤5N", "success": "≥99.5%"}},
+        {"state": "完成", "action_mod": "扫码+放行", "metric": {"barcode_read": "≥99.8%", "cycle_time": "≤8s", "success": "≥99.5%"}}
+      ]
+    },
+    {
+      "id": "SCN_AOI_DETECT",
+      "name": "AOI光学检测",
+      "process": "金手指6视角 + 表面PD判定",
+      "robot": "静止定位 (检测工位)",
+      "equipment": "OPT-CC1-GG50(金手指2448×2048) + OPT-CC1-C050-GG3(表面)",
+      "states_8": ["对位", "下降", "锁定", "检测1-6", "PD判定", "OK/NG", "放行", "完成"],
+      "action_metrics": [
+        {"state": "对位", "action_mod": "相机对位", "metric": {"align_accuracy": "±0.1mm", "success": "≥99%"}},
+        {"state": "检测", "action_mod": "6视角采集", "metric": {"resolution": "0.02mm/pixel", "min_defect": "0.05mm", "capture_time": "≤1s/视角", "success": "≥99%"}},
+        {"state": "PD判定", "action_mod": "缺陷分类", "metric": {"false_positive": "≤1%", "false_negative": "≤0.5%", "success": "≥99%"}},
+        {"state": "完成", "action_mod": "OK/NG分流", "metric": {"cycle_time": "≤15s", "traceability": "100% 记录", "success": "≥99%"}}
+      ]
+    }
+  ],
+
+  "dashboard_monitoring": {
+    "endpoint": "https://datadrive.world/factory-dashboard.html",
+    "per_action_monitor": {
+      "robot_id": "LR_XMS5_01",
+      "action": "8状态机每步",
+      "metrics_recorded": ["成功/失败", "实际值vs指标", "节拍", "力/位置/速度"],
+      "alarm": "任一指标未达成 → 红灯+记录+告警",
+      "history": "每次动作记录, 可追溯"
+    },
+    "kpi_display": {
+      "成功率": "≥99% (实时滚动)",
+      "节拍": "≤15s/件",
+      "吞吐": "≥240件/小时",
+      "缺陷漏杀": "≤0.5%",
+      "设备OEE": "≥85%"
+    },
+    "data_source": {
+      "robot": "/robot/joint_states + /robot/tcp_pose + /robot/force_torque",
+      "state_machine": "/motion/active_states + /motion/active_transition",
+      "aoi": "工控机 10082/10083",
+      "report": "relay /api/relay/orin/status + shadow_report"
+    }
+  }
+}
