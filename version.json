@@ -1,12 +1,15 @@
 {
   "project": "Z-MAX Data Pipeline",
-  "version": "v3.0.1",
-  "date": "2026-08-09",
+  "version": "v3.0.2",
+  "date": "2026-08-10",
   "maintainer": "小芳 (Hermes)",
   "status": "running",
-  "release_note": "小版本: 原子场景JSON(插拔/搬运/光学检测三场景,工艺指标+结构尺寸) + 收工清理",
+  "release_note": "小版本: 动作级指标采集(P3端侧) + 精细操作场景监督方案落地 + 需求规格书",
   "changes": [
-    "feat: SCENES-ATOMIC.json 原子场景库(SCN_PLUG/SCN_TRANSFER/SCN_AOI, 成功率≥99%+节拍+结构尺寸)",
+    "feat: orin_action_metrics.py 动作级指标采集(8状态机量测+力觉→/api/action-log)",
+    "docs: FACTORY-REQ-SPEC.md 光模块工厂需求规格书(市场版6场景)",
+    "docs: PRECISION-SCENES-PLAN.md 精细操作场景监督方案(8状态×指标+大屏设计)",
+    "feat: SCENES-ATOMIC.json 原子场景库(SCN_PLUG/SCN_TRANSFER/SCN_AOI)",
     "chore: mcap清理739M(保留10轮)"
   ],
   "version_sync": "产品v2.0.0 = 管线v3.0.x (大版本一致)",
