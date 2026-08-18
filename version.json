@@ -1,18 +1,20 @@
 {
   "project": "Z-MAX Data Pipeline",
-  "version": "v3.0.2",
-  "date": "2026-08-10",
+  "version": "v3.1.0",
+  "date": "2026-08-11",
   "maintainer": "小芳 (Hermes)",
   "status": "running",
-  "release_note": "小版本: 动作级指标采集(P3端侧) + 精细操作场景监督方案落地 + 需求规格书",
+  "release_note": "中版本迭代: Z700部署包拉取+Docker方案 + 精细操作监督P3落地 + 需求规格书 + 备份完成",
   "changes": [
+    "feat: cicd_pull_z700.py Z700部署包拉取(relay→Mac解包+sha256校验)",
+    "feat: Docker方案部署准备(zmax-std:1.0-infer容器挂载, Mac Docker 24.0.5)",
     "feat: orin_action_metrics.py 动作级指标采集(8状态机量测+力觉→/api/action-log)",
     "docs: FACTORY-REQ-SPEC.md 光模块工厂需求规格书(市场版6场景)",
     "docs: PRECISION-SCENES-PLAN.md 精细操作场景监督方案(8状态×指标+大屏设计)",
     "feat: SCENES-ATOMIC.json 原子场景库(SCN_PLUG/SCN_TRANSFER/SCN_AOI)",
-    "chore: mcap清理739M(保留10轮)"
+    "sync: P3指标量测+需求规格书(GUI main 816b10d7/bd1e1c1a)"
   ],
-  "version_sync": "产品v2.0.0 = 管线v3.0.x (大版本一致)",
+  "version_sync": "产品v2.0.0 = 管线v3.1.0 (大版本一致)",
   "cron_services": [
     "zmax-auto-ops: 链路健康检查+服务自愈 (10min)",
     "zmax-auto-collect: 磁盘守护+采集+打标+上传 (10min)",
