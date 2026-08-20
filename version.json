@@ -1,10 +1,10 @@
 {
   "project": "Z-MAX Data Pipeline",
-  "version": "v3.1.0",
+  "version": "v3.1.1",
   "date": "2026-08-11",
   "maintainer": "小芳 (Hermes)",
   "status": "running",
-  "release_note": "中版本迭代: Z700部署包拉取+Docker方案 + 精细操作监督P3落地 + 需求规格书 + 备份完成",
+  "release_note": "小版本: 备份确认 + simulink状态空间对齐(22节点21连线基准) + Hermes升级准备",
   "changes": [
     "feat: cicd_pull_z700.py Z700部署包拉取(relay→Mac解包+sha256校验)",
     "feat: Docker方案部署准备(zmax-std:1.0-infer容器挂载, Mac Docker 24.0.5)",
